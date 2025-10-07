@@ -1,67 +1,71 @@
+# auth.py
+
 from functools import wraps
 
 import jwt
-from flask import Blueprint, current_app, g, jsonify, request
+from flask import current_app, jsonify, request
+from jwt import ExpiredSignatureError, InvalidSignatureError
 
-# Crie um Blueprint para modularizar funções de autenticação/utilitários.
-# Embora o decorador não defina rotas, o Blueprint é um bom lugar para organizar
-# futuras rotas de auth (como /auth/refresh-token) ou utilitários.
-auth_bp = Blueprint('auth', __name__)
 
-def token_obrigatorio(f):
+# O decorador agora aceita o argumento role_necessaria
+def token_obrigatorio(role_necessaria):
     """
-    Decorador que verifica a presença e validade de um token JWT no cabeçalho 
-    Authorization (Bearer).
+    Decorador que verifica o token JWT.
 
-    Se válido, decodifica o payload e armazena 'gestor_id' e 'role' no objeto 'g'
-    para que a rota protegida possa utilizá-los.
+    Aceita um argumento role_necessaria (ex: 'gestor' ou 'cliente') 
+    e verifica se o 'role' no payload do token corresponde ao necessário.
+
+    Passa o payload (dados_usuario) para a função decorada.
     """
 
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        token = None
-        # Tenta extrair o token do cabeçalho 'Authorization: Bearer <token>'
-        if 'Authorization' in request.headers:
-            auth_header = request.headers['Authorization']
-            if auth_header.startswith('Bearer '):
-                token = auth_header.split(' ')[1]
+    # A função decorador (a camada externa) recebe o role_necessaria
+    def decorator(f):
 
-        if not token:
-            return jsonify({'message': 'Token de autenticação ausente!'}), 401
+        # A função interna (o wrapper) recebe os argumentos da rota
+        @wraps(f)
+        def decorated(*args, **kwargs):
+            token = None
+            auth_header = request.headers.get('Authorization')
 
-        try:
-            # Acessa a chave secreta da configuração da aplicação principal
-            session_secret = current_app.config.get('SESSION_SECRET')
+            # 1. Obter o token
+            if auth_header and auth_header.startswith('Bearer '):
+                # Pega a parte do token, ignorando 'Bearer '
+                token = auth_header.split(" ")[1]
 
-            if not session_secret:
-                 print("AVISO CRÍTICO: SESSION_SECRET não definida na configuração.")
-                 return jsonify({'message': 'Erro de configuração do servidor.'}), 500
+            if not token:
+                return jsonify({'error': 'Token de autenticação ausente.'}), 401
 
-            # 1. Decodifica o token usando a chave secreta
-            data = jwt.decode(token,
-                              session_secret,
-                              algorithms=["HS256"])
-            # 2. Verifica a função do usuário
-            role = data.get('role')
+            try:
+                # 2. Decodifica e valida o token
+                session_secret = current_app.config.get('SESSION_SECRET')
 
-            # Mantendo a lógica original: só permite acesso a 'gestor'
-            if role != 'gestor':
-                return jsonify(
-                    {'message':
-                     'Acesso negado: Requer função de Gestor.'}), 403
+                if not session_secret:
+                    # Falha se a chave secreta não estiver configurada
+                    raise Exception("SESSION_SECRET não configurado.")
 
-            # Armazena o ID e a função no objeto 'g' para uso na rota
-            g.user_id = data.get('gestor_id')
-            g.user_role = role
+                dados_usuario = jwt.decode(
+                    token, 
+                    session_secret, 
+                    algorithms=["HS256"]
+                )
 
-        except jwt.ExpiredSignatureError:
-            return jsonify({'message': 'Token expirado.'}), 401
-        except jwt.InvalidTokenError:
-            return jsonify({'message': 'Token inválido.'}), 401
-        except Exception as e:
-            print(f"Erro na verificação do token: {e}")
-            return jsonify({'message': 'Erro ao processar o token.'}), 500
+                # 3. VERIFICAÇÃO DE PERFIL (ROLE)
+                token_role = dados_usuario.get('role')
+                if token_role != role_necessaria:
+                     # Se o perfil no token não for o esperado para a rota
+                     return jsonify({'error': f'Acesso negado. Necessário perfil: {role_necessaria}.'}), 403
 
-        return f(*args, **kwargs)
+            except ExpiredSignatureError:
+                return jsonify({'error': 'Token expirado.'}), 401
+            except InvalidSignatureError:
+                return jsonify({'error': 'Token inválido.'}), 401
+            except Exception as e:
+                print(f"Erro ao processar token: {e}")
+                return jsonify({'error': 'Erro interno do servidor ou token malformado.'}), 500
 
-    return decorated
+            # 4. Passa os dados do token (payload) para a função decorada
+            return f(dados_usuario, *args, **kwargs)
+
+        return decorated
+
+    return decorator

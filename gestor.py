@@ -2,10 +2,10 @@ from datetime import datetime, timedelta, timezone
 
 import jwt
 import psycopg2
-from flask import Blueprint, current_app, g, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 from flask_bcrypt import Bcrypt
 
-from auth import token_obrigatorio
+from auth import token_obrigatorio  # Importando o decorador de autenticação
 
 # Importações de outros módulos
 from banco import get_db_connection
@@ -19,42 +19,8 @@ bcrypt = Bcrypt()
 gestor_bp = Blueprint('gestor', __name__)
 
 
-# 4. Rota: Listar todos os Gestores
-@gestor_bp.route('/gestores', methods=['GET'])
-def listar_gestores():
-    """Retorna a lista de todos os gestores cadastrados."""
-    conn = get_db_connection()
-    if conn is None:
-        return jsonify({"error": "Falha na conexão com o banco de dados"}), 500
-
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT gestor_id, nome, email, data_cadastro FROM gestores;")
-
-        # Converte o resultado em uma lista de dicionários
-        gestores = [{
-            "gestor_id": row[0],
-            "nome": row[1],
-            "email": row[2],
-            "data_cadastro": row[3]
-        } for row in cur.fetchall()]
-
-        cur.close()
-        return jsonify(gestores)
-
-    except Exception as e:
-        print(f"Erro na consulta: {e}")
-        return jsonify({"error":
-                         f"Erro ao buscar gestores. Detalhe: {e}"}), 500
-
-    finally:
-        if conn:
-            conn.close()
-
-
 # 5. Rota: Criar um novo Gestor (Cadastro)
-@gestor_bp.route('/gestores', methods=['POST'])
+@gestor_bp.route('/gestor', methods=['POST'])
 def criar_gestor():
     """Cria um novo gestor, gerando o hash da senha."""
     data = request.get_json()
@@ -154,7 +120,6 @@ def login_gestor():
             }
 
             # Codifica usando a chave SESSION_SECRET do app principal
-            # 'current_app' é necessário pois o Bcrypt está no Blueprint
             token = jwt.encode(payload,
                                current_app.config['SESSION_SECRET'],
                                algorithm='HS256')
@@ -176,3 +141,50 @@ def login_gestor():
             conn.close()
 
 
+# 7. Rota: Meu Perfil do Gestor (Protegida)
+@gestor_bp.route('/gestor/meu-perfil', methods=['GET'])
+@token_obrigatorio('gestor') # Proteção de rota garantindo a role 'gestor'
+def meu_perfil_gestor(dados_usuario):
+    """
+    Retorna os dados básicos do perfil do gestor logado,
+    usando o gestor_id extraído do token JWT.
+    """
+    # O decorador garante que o token é válido e a role é 'gestor'.
+    gestor_id_do_token = dados_usuario.get('gestor_id')
+
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify({"error": "Falha na conexão com o banco de dados"}), 500
+
+    try:
+        cur = conn.cursor()
+
+        # Seleciona apenas dados que não são sensíveis
+        cur.execute(
+            "SELECT gestor_id, nome, email, data_cadastro FROM gestores WHERE gestor_id = %s;",
+            (gestor_id_do_token, )
+        )
+        gestor_perfil = cur.fetchone()
+        cur.close()
+
+        if gestor_perfil is None:
+            # Isso só deve acontecer se o ID do token for válido mas o gestor foi deletado
+            return jsonify({"error": "Gestor não encontrado."}), 404
+
+        # Mapeia o resultado da tupla para um dicionário
+        perfil = {
+            "gestor_id": gestor_perfil[0],
+            "nome": gestor_perfil[1],
+            "email": gestor_perfil[2],
+            "data_cadastro": gestor_perfil[3].isoformat() if gestor_perfil[3] else None
+        }
+
+        return jsonify(perfil), 200
+
+    except Exception as e:
+        print(f"Erro ao buscar perfil do gestor: {e}")
+        return jsonify({"error": "Erro interno ao buscar perfil."}), 500
+
+    finally:
+        if conn:
+            conn.close()
