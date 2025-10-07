@@ -5,6 +5,7 @@ from auth import token_obrigatorio
 from banco import get_db_connection
 from gestor import gestor_bp
 
+loja_bp = Blueprint('gestor', __name__)
 # 7. Rota Protegida: Criar uma nova Loja
 @gestor_bp.route('/lojas', methods=['POST'])
 @token_obrigatorio  # 🛡️ Acesso somente para gestores
