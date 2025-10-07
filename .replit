@@ -6,6 +6,7 @@ hidden = [".pythonlibs"]
 
 [nix]
 channel = "stable-24_05"
+packages = ["nano"]
 
 [deployment]
 run =  ["gunicorn", "--bind", "0.0.0.0:5000", "main:app"]
@@ -23,6 +24,7 @@ externalPort = 8080
 expertMode = true
 
 [workflows]
+runButton = "Project"
 
 [[workflows.workflow]]
 name = "start"
@@ -32,3 +34,24 @@ author = 48225867
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "python app.py"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Server"
+
+[[workflows.workflow]]
+name = "Server"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python main.py"
+waitForPort = 8080
+
+[workflows.workflow.metadata]
+outputType = "console"
