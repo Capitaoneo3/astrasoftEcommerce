@@ -55,3 +55,6 @@ waitForPort = 8080
 
 [workflows.workflow.metadata]
 outputType = "console"
+
+[objectStorage]
+defaultBucketID = "replit-objstore-a09a8eec-02ac-484f-b666-50474d8fe3ac"
