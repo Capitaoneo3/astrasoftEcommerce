@@ -143,7 +143,7 @@ def login_gestor():
 
 # 7. Rota: Meu Perfil do Gestor (Protegida)
 @gestor_bp.route('/gestor/meu-perfil', methods=['GET'])
-@token_obrigatorio('gestor') # Proteção de rota garantindo a role 'gestor'
+@token_obrigatorio('gestor')  # Proteção de rota garantindo a role 'gestor'
 def meu_perfil_gestor(dados_usuario):
     """
     Retorna os dados básicos do perfil do gestor logado,
@@ -162,8 +162,7 @@ def meu_perfil_gestor(dados_usuario):
         # Seleciona apenas dados que não são sensíveis
         cur.execute(
             "SELECT gestor_id, nome, email, data_cadastro FROM gestores WHERE gestor_id = %s;",
-            (gestor_id_do_token, )
-        )
+            (gestor_id_do_token, ))
         gestor_perfil = cur.fetchone()
         cur.close()
 
@@ -173,10 +172,14 @@ def meu_perfil_gestor(dados_usuario):
 
         # Mapeia o resultado da tupla para um dicionário
         perfil = {
-            "gestor_id": gestor_perfil[0],
-            "nome": gestor_perfil[1],
-            "email": gestor_perfil[2],
-            "data_cadastro": gestor_perfil[3].isoformat() if gestor_perfil[3] else None
+            "gestor_id":
+            gestor_perfil[0],
+            "nome":
+            gestor_perfil[1],
+            "email":
+            gestor_perfil[2],
+            "data_cadastro":
+            gestor_perfil[3].isoformat() if gestor_perfil[3] else None
         }
 
         return jsonify(perfil), 200
@@ -184,6 +187,128 @@ def meu_perfil_gestor(dados_usuario):
     except Exception as e:
         print(f"Erro ao buscar perfil do gestor: {e}")
         return jsonify({"error": "Erro interno ao buscar perfil."}), 500
+
+    finally:
+        if conn:
+            conn.close()
+
+
+# Continuação de gestor.py
+
+
+# 8. Rota Protegida: Atualizar Meu Perfil de Gestor
+@gestor_bp.route('/gestor/meu-perfil', methods=['PUT'])
+@token_obrigatorio('gestor')
+def atualizar_gestor(dados_usuario):
+    """Permite ao gestor logado atualizar seu nome ou senha."""
+    gestor_id = dados_usuario.get('gestor_id')
+    data = request.get_json()
+
+    # Campos que podem ser atualizados
+    nome = data.get('nome')
+    senha_plana = data.get('senha')
+
+    updates = []
+    valores = []
+
+    if nome:
+        updates.append("nome = %s")
+        valores.append(nome)
+
+    if senha_plana:
+        # Gera o hash seguro da nova senha
+        senha_hash_seguro = bcrypt.generate_password_hash(senha_plana).decode(
+            'utf-8')
+        updates.append("senha_hash = %s")
+        valores.append(senha_hash_seguro)
+
+    if not updates:
+        return jsonify({
+            "error":
+            "Nenhum dado (nome ou senha) fornecido para atualização."
+        }), 400
+
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify({"error": "Falha na conexão com o banco de dados"}), 500
+
+    try:
+        cur = conn.cursor()
+
+        query = f"""
+            UPDATE gestores 
+            SET {', '.join(updates)}
+            WHERE gestor_id = %s
+            RETURNING gestor_id;
+        """
+        # Adiciona o ID do gestor para o filtro WHERE
+        valores.append(gestor_id)
+
+        cur.execute(query, tuple(valores))
+
+        if cur.rowcount == 0:
+            conn.rollback()
+            return jsonify(
+                {"error": "Gestor não encontrado para atualização."}), 404
+
+        conn.commit()
+        cur.close()
+
+        return jsonify({"message":
+                        "Perfil de gestor atualizado com sucesso."}), 200
+
+    except Exception as e:
+        conn.rollback()
+        print(f"Erro ao atualizar gestor: {e}")
+        return jsonify(
+            {"error": f"Erro interno ao atualizar perfil. Detalhe: {e}"}), 500
+
+    finally:
+        if conn:
+            conn.close()
+
+
+# 9. Rota Protegida: Deletar Meu Perfil de Gestor
+@gestor_bp.route('/gestor/meu-perfil', methods=['DELETE'])
+@token_obrigatorio('gestor')
+def deletar_gestor(dados_usuario):
+    """Permite ao gestor logado deletar sua própria conta."""
+    gestor_id = dados_usuario.get('gestor_id')
+
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify({"error": "Falha na conexão com o banco de dados"}), 500
+
+    try:
+        cur = conn.cursor()
+
+        # Deletar o gestor
+        query = "DELETE FROM gestores WHERE gestor_id = %s;"
+        cur.execute(query, (gestor_id, ))
+
+        if cur.rowcount == 0:
+            conn.rollback()
+            return jsonify({"error":
+                            "Gestor não encontrado para deleção."}), 404
+
+        conn.commit()
+        cur.close()
+
+        return jsonify({"message":
+                        "Conta de gestor deletada com sucesso."}), 200
+
+    except Exception as e:
+        conn.rollback()
+        print(f"Erro ao deletar gestor: {e}")
+        # Nota: Se o gestor tiver lojas associadas, a deleção pode falhar devido à FK.
+        if "foreign key constraint" in str(e).lower():
+            return jsonify({
+                "error":
+                "Não é possível deletar a conta: Você possui lojas cadastradas. Por favor, remova todas as lojas primeiro."
+            }), 409
+
+        return jsonify(
+            {"error": f"Erro interno ao deletar gestor. Detalhe: {e}"}), 500
 
     finally:
         if conn:
