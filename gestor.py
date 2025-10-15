@@ -1,9 +1,12 @@
 from datetime import datetime, timedelta, timezone
+import os
 
 import jwt
 import psycopg2
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, jsonify, request, send_file
+from io import BytesIO
 from flask_bcrypt import Bcrypt
+from replit.object_storage import Client
 
 from auth import token_obrigatorio  # Importando o decorador de autenticação
 
@@ -14,6 +17,7 @@ from banco import get_db_connection
 # Criamos a instância do Bcrypt aqui, mas a inicialização com o app principal
 # (bcrypt.init_app(app)) ocorrerá em app.py para evitar dependências circulares.
 bcrypt = Bcrypt()
+client = Client()
 
 # 2. Definição do Blueprint
 gestor_bp = Blueprint('gestor', __name__)
@@ -161,7 +165,7 @@ def meu_perfil_gestor(dados_usuario):
 
         # Seleciona apenas dados que não são sensíveis
         cur.execute(
-            "SELECT gestor_id, nome, email, data_cadastro FROM gestores WHERE gestor_id = %s;",
+            "SELECT gestor_id, nome, email, data_cadastro, foto_perfil FROM gestores WHERE gestor_id = %s;",
             (gestor_id_do_token, ))
         gestor_perfil = cur.fetchone()
         cur.close()
@@ -179,7 +183,9 @@ def meu_perfil_gestor(dados_usuario):
             "email":
             gestor_perfil[2],
             "data_cadastro":
-            gestor_perfil[3].isoformat() if gestor_perfil[3] else None
+            gestor_perfil[3].isoformat() if gestor_perfil[3] else None,
+            "foto_perfil_url":
+            f"/gestor/foto/{gestor_perfil[0]}" if gestor_perfil[4] else None
         }
 
         return jsonify(perfil), 200
@@ -200,14 +206,14 @@ def meu_perfil_gestor(dados_usuario):
 @gestor_bp.route('/gestor/meu-perfil', methods=['PUT'])
 @token_obrigatorio('gestor')
 def atualizar_gestor(dados_usuario):
-    """Permite ao gestor logado atualizar seu nome ou senha."""
+    """Permite ao gestor logado atualizar seu nome, senha ou foto de perfil."""
     gestor_id = dados_usuario.get('gestor_id')
-    data = request.get_json()
-
+    
     # Campos que podem ser atualizados
-    nome = data.get('nome')
-    senha_plana = data.get('senha')
-
+    nome = request.form.get('nome')
+    senha_plana = request.form.get('senha')
+    foto = request.files.get('foto')
+    
     updates = []
     valores = []
 
@@ -222,18 +228,46 @@ def atualizar_gestor(dados_usuario):
         updates.append("senha_hash = %s")
         valores.append(senha_hash_seguro)
 
-    if not updates:
-        return jsonify({
-            "error":
-            "Nenhum dado (nome ou senha) fornecido para atualização."
-        }), 400
-
     conn = get_db_connection()
     if conn is None:
         return jsonify({"error": "Falha na conexão com o banco de dados"}), 500
 
     try:
         cur = conn.cursor()
+        
+        # Se há uma foto para fazer upload
+        if foto:
+            # Buscar foto antiga do gestor para deletar
+            cur.execute(
+                "SELECT foto_perfil FROM gestores WHERE gestor_id = %s;",
+                (gestor_id,)
+            )
+            resultado = cur.fetchone()
+            foto_antiga = resultado[0] if resultado else None
+            
+            # Deletar foto antiga do storage se existir
+            if foto_antiga:
+                try:
+                    client.delete(foto_antiga, ignore_not_found=True)
+                except Exception as e:
+                    print(f"Erro ao deletar foto antiga: {e}")
+            
+            # Fazer upload da nova foto
+            extensao = os.path.splitext(foto.filename)[1] if foto.filename else '.jpg'
+            nome_arquivo = f"gestor_{gestor_id}_perfil{extensao}"
+            
+            # Upload do arquivo para o storage
+            client.upload_from_bytes(nome_arquivo, foto.read())
+            
+            # Adicionar o caminho da foto aos updates
+            updates.append("foto_perfil = %s")
+            valores.append(nome_arquivo)
+
+        if not updates:
+            return jsonify({
+                "error":
+                "Nenhum dado (nome, senha ou foto) fornecido para atualização."
+            }), 400
 
         query = f"""
             UPDATE gestores 
@@ -313,3 +347,55 @@ def deletar_gestor(dados_usuario):
     finally:
         if conn:
             conn.close()
+
+
+# 10. Rota: Servir Foto de Perfil do Gestor
+@gestor_bp.route("/gestor/foto/<int:gestor_id>", methods=["GET"])
+def obter_foto_gestor(gestor_id):
+    """Retorna a foto de perfil do gestor."""
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify({"error": "Falha na conexão com o banco de dados"}), 500
+
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT foto_perfil FROM gestores WHERE gestor_id = %s;",
+            (gestor_id,)
+        )
+        resultado = cur.fetchone()
+        cur.close()
+
+        if not resultado or not resultado[0]:
+            return jsonify({"error": "Foto não encontrada"}), 404
+
+        foto_nome = resultado[0]
+        
+        # Baixar foto do storage
+        foto_bytes = client.download_as_bytes(foto_nome)
+        
+        # Determinar o tipo MIME baseado na extensão
+        extensao = os.path.splitext(foto_nome)[1].lower()
+        mime_types = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".gif": "image/gif",
+            ".webp": "image/webp"
+        }
+        mime_type = mime_types.get(extensao, "image/jpeg")
+        
+        return send_file(
+            BytesIO(foto_bytes),
+            mimetype=mime_type,
+            as_attachment=False
+        )
+
+    except Exception as e:
+        print(f"Erro ao obter foto do gestor: {e}")
+        return jsonify({"error": "Erro ao carregar foto"}), 500
+
+    finally:
+        if conn:
+            conn.close()
+
