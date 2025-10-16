@@ -233,6 +233,11 @@ def obter_perfil_gestor(dados_usuario):
         if conn:
             conn.close()
 
+# 8. Rota: Buscar Gestor por ID (Potencialmente Protegida)
+@gestor_bp.route('/gestor/<int:gestor_id_url>', methods=['GET'])
+# Se esta rota só puder ser acessada por administradores ou super-usuários, você deve protegê-la.
+# Ex: @token_obrigatorio('admin')
+
 
 # 8. Rota Protegida: Atualizar Meu Perfil de Gestor
 @gestor_bp.route('/gestor/meu-perfil', methods=['PUT'])
@@ -240,17 +245,17 @@ def obter_perfil_gestor(dados_usuario):
 def atualizar_gestor(dados_usuario):
     """
     PUT /gestor/meu-perfil
-    Rota protegida. Permite ao gestor logado atualizar seu nome, senha ou foto de perfil.
-    Requer: Token JWT válido e dados de formulário ('nome', 'senha' ou 'foto_perfil').
+    Rota protegida. Permite ao gestor logado atualizar seu nome, email, senha ou foto de perfil.
+    Requer: Token JWT válido e dados de formulário ('nome', 'email', 'senha' ou 'foto_perfil').
     Retorna: Mensagem de sucesso ou erro (400, 404, 500).
     """
-    # Nota: Assumindo que você tem 'request' e 'bcrypt' importados (Flask e Flask-Bcrypt)
-    # e 'client' e 'os' (Storage client e funções de caminho)
-
     gestor_id = dados_usuario.get('gestor_id')
 
     # Campos que podem ser atualizados
     nome = request.form.get('nome')
+    # === NOVO: Captura do email ===
+    email = request.form.get('email')
+    # ==============================
     senha_plana = request.form.get('senha')
     foto = request.files.get('foto_perfil')
 
@@ -260,6 +265,13 @@ def atualizar_gestor(dados_usuario):
     if nome:
         updates.append("nome = %s")
         valores.append(nome)
+
+    # === NOVO: Adiciona o email ao update, se fornecido ===
+    if email:
+        # Nota: Você pode querer adicionar uma validação de formato de email aqui.
+        updates.append("email = %s")
+        valores.append(email)
+    # =======================================================
 
     if senha_plana:
         # Gera o hash seguro da nova senha (Melhor Prática!)
@@ -276,7 +288,7 @@ def atualizar_gestor(dados_usuario):
         with conn:
             with conn.cursor() as cur:
 
-                # --- Lógica de Upload de Foto ---
+                # --- Lógica de Upload de Foto (Permanece a mesma) ---
                 if foto:
                     # 1. Buscar foto antiga do gestor para deletar
                     cur.execute(
@@ -289,10 +301,8 @@ def atualizar_gestor(dados_usuario):
                     # 2. Deletar foto antiga do storage se existir
                     if foto_antiga:
                         try:
-                            # A função 'client.delete' deve ser robusta para lidar com falhas
                             client.delete(foto_antiga, ignore_not_found=True)
                         except Exception as e:
-                            # Isso é um aviso. Não deve bloquear a atualização de outros campos.
                             print(f"Aviso: Erro ao deletar foto antiga, mas a atualização continua: {e}")
 
                     # 3. Fazer upload da nova foto
@@ -300,7 +310,6 @@ def atualizar_gestor(dados_usuario):
                     nome_arquivo = f"gestor_{gestor_id}_perfil{extensao}"
 
                     # Upload do arquivo para o storage
-                    # É crucial que este passo seja atômico ou que a falha leve a um rollback
                     client.upload_from_bytes(nome_arquivo, foto.read())
 
                     # 4. Adicionar o caminho da nova foto aos updates do DB
@@ -308,14 +317,14 @@ def atualizar_gestor(dados_usuario):
                     valores.append(nome_arquivo)
 
                 # --- Verificação de Updates ---
+                # A mensagem de erro foi atualizada para incluir 'email'
                 if not updates:
                     return jsonify({
                         "error":
-                        "Nenhum dado (nome, senha ou foto) fornecido para atualização."
+                        "Nenhum dado (nome, email, senha ou foto) fornecido para atualização."
                     }), 400
 
                 # --- Execução do SQL UPDATE ---
-                # Removemos o RETURNING gestor_id, pois não é usado
                 query = f"""
                     UPDATE gestores 
                     SET {', '.join(updates)}
@@ -327,9 +336,7 @@ def atualizar_gestor(dados_usuario):
                 cur.execute(query, tuple(valores))
 
                 if cur.rowcount == 0:
-                    # O rollback é feito automaticamente pelo 'with conn:', mas o erro 404 é importante
-                    # Para drivers que não fazem rollback no 'with', precisamos de conn.rollback() aqui.
-                    conn.rollback() 
+                    conn.rollback()
                     return jsonify(
                         {"error": "Gestor não encontrado para atualização."}), 404
 
@@ -342,15 +349,13 @@ def atualizar_gestor(dados_usuario):
 
     except Exception as e:
         # Se ocorrer qualquer erro, faz o rollback e loga o erro
-        conn.rollback() 
+        conn.rollback()
         print(f"Erro ao atualizar gestor: {e}")
-        # Retornar o detalhe 'e' no ambiente de produção pode ser um risco de segurança.
         return jsonify(
             {"error": "Erro interno ao atualizar perfil."}), 500
 
     finally:
         if conn:
-            # O 'with conn' deveria fechar, mas mantemos o finally para robustez caso o 'with' não seja usado corretamente em alguma exceção
             conn.close()
 
 
