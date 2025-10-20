@@ -121,8 +121,7 @@ def listar_todas_lojas():
 @loja_bp.route('/gestor/minhas-lojas', methods=['GET'])
 @token_obrigatorio(role_necessaria='gestor')  # 🛡️ Acesso somente para gestores
 def listar_lojas_do_gestor(dados_usuario):
-    """Retorna uma lista de lojas cadastradas pelo gestor autenticado."""
-    # O ID do gestor é pego diretamente do payload do token
+    """Retorna uma lista de lojas cadastradas pelo gestor autenticado, com endereço completo."""
     gestor_id_logado = dados_usuario.get('gestor_id')
 
     conn = get_db_connection()
@@ -131,9 +130,9 @@ def listar_lojas_do_gestor(dados_usuario):
 
     try:
         cur = conn.cursor()
-        # Seleciona lojas filtrando pelo gestor_id
+        # MUDANÇA: Adicionar endereco_rua e endereco_cep na seleção
         query = """
-            SELECT loja_id, nome_loja, endereco_cidade, endereco_estado, data_criacao 
+            SELECT loja_id, nome_loja, endereco_rua, endereco_cidade, endereco_estado, endereco_cep, data_criacao 
             FROM lojas
             WHERE gestor_id = %s
             ORDER BY nome_loja;
@@ -142,12 +141,15 @@ def listar_lojas_do_gestor(dados_usuario):
         lojas_data = cur.fetchall()
         cur.close()
 
+        # MUDANÇA: Ajustar a construção do dicionário (os índices mudaram)
         lojas = [{
             "loja_id": row[0],
             "nome_loja": row[1],
-            "cidade": row[2],
-            "estado": row[3],
-            "data_criacao": row[4].isoformat() if row[4] else None
+            "endereco_rua": row[2],      # NOVO CAMPO
+            "cidade": row[3],
+            "estado": row[4],
+            "endereco_cep": row[5],      # NOVO CAMPO
+            "data_criacao": row[6].isoformat() if row[6] else None
         } for row in lojas_data]
 
         return jsonify({"minhas_lojas": lojas}), 200
@@ -159,7 +161,6 @@ def listar_lojas_do_gestor(dados_usuario):
     finally:
         if conn:
             conn.close()
-
 
 # Continuação de loja.py
 
