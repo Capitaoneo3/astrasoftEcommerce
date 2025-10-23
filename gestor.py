@@ -1,8 +1,8 @@
 import os
 from datetime import datetime, timedelta, timezone
-from io import BytesIO  # Importação necessária para send_file
+from io import BytesIO
 
-import jwt  # Importação do JWT
+import jwt
 import psycopg2
 from flask import Blueprint, current_app, jsonify, request, send_file
 from flask_bcrypt import Bcrypt
@@ -11,9 +11,9 @@ from replit.object_storage import Client
 from auth import token_obrigatorio  # Importando o decorador de autenticação
 from banco import get_db_connection
 
-# 1. Instância do Bcrypt
+# 1. Instância do Bcrypt e Client
 bcrypt = Bcrypt()
-client = Client()
+client = Client() # Instância do client, agora exportada
 
 # 2. Definição do Blueprint
 gestor_bp = Blueprint('gestor', __name__)
@@ -65,7 +65,7 @@ def criar_gestor():
 
         payload = {
             'gestor_id': gestor_id,
-            'nome': nome, 
+            'nome': nome,
             'exp': expiracao,  # Expiração
             'iat': datetime.now(timezone.utc),  # Emitido em
             'role': 'gestor'  # Define a função do usuário
@@ -82,7 +82,7 @@ def criar_gestor():
         return jsonify({
             "message": "Gestor criado com sucesso",
             "gestor_id": gestor_id,
-            "token": token # Retornando o token
+            "token": token  # Retornando o token
         }), 201
 
     except psycopg2.errors.UniqueViolation:
@@ -222,7 +222,7 @@ def obter_perfil_gestor(dados_usuario):
             "email": email,
             # Retorna o nome do arquivo, que pode ser usado para a rota /gestor/foto/<id>
             "foto_perfil": foto_perfil,
-            "token": token # Adicionando o token atualizado
+            "token": token  # Adicionando o token atualizado
         }), 200
 
     except Exception as e:
@@ -232,11 +232,6 @@ def obter_perfil_gestor(dados_usuario):
     finally:
         if conn:
             conn.close()
-
-# 8. Rota: Buscar Gestor por ID (Potencialmente Protegida)
-@gestor_bp.route('/gestor/<int:gestor_id_url>', methods=['GET'])
-# Se esta rota só puder ser acessada por administradores ou super-usuários, você deve protegê-la.
-# Ex: @token_obrigatorio('admin')
 
 
 # 8. Rota Protegida: Atualizar Meu Perfil de Gestor
@@ -251,11 +246,9 @@ def atualizar_gestor(dados_usuario):
     """
     gestor_id = dados_usuario.get('gestor_id')
 
-    # Campos que podem ser atualizados
+    # Campos que podem ser atualizados (Usamos request.form para multipart/form-data)
     nome = request.form.get('nome')
-    # === NOVO: Captura do email ===
     email = request.form.get('email')
-    # ==============================
     senha_plana = request.form.get('senha')
     foto = request.files.get('foto_perfil')
 
@@ -266,12 +259,9 @@ def atualizar_gestor(dados_usuario):
         updates.append("nome = %s")
         valores.append(nome)
 
-    # === NOVO: Adiciona o email ao update, se fornecido ===
     if email:
-        # Nota: Você pode querer adicionar uma validação de formato de email aqui.
         updates.append("email = %s")
         valores.append(email)
-    # =======================================================
 
     if senha_plana:
         # Gera o hash seguro da nova senha (Melhor Prática!)
@@ -288,7 +278,7 @@ def atualizar_gestor(dados_usuario):
         with conn:
             with conn.cursor() as cur:
 
-                # --- Lógica de Upload de Foto (Permanece a mesma) ---
+                # --- Lógica de Upload de Foto ---
                 if foto:
                     # 1. Buscar foto antiga do gestor para deletar
                     cur.execute(
@@ -317,7 +307,6 @@ def atualizar_gestor(dados_usuario):
                     valores.append(nome_arquivo)
 
                 # --- Verificação de Updates ---
-                # A mensagem de erro foi atualizada para incluir 'email'
                 if not updates:
                     return jsonify({
                         "error":
@@ -385,13 +374,13 @@ def deletar_gestor(dados_usuario):
         if cur.rowcount == 0:
             conn.rollback()
             return jsonify({"error":
-                            "Gestor não encontrado para deleção."}), 404
+                               "Gestor não encontrado para deleção."}), 404
 
         conn.commit()
         cur.close()
 
         return jsonify({"message":
-                            "Conta de gestor deletada com sucesso."}), 200
+                               "Conta de gestor deletada com sucesso."}), 200
 
     except Exception as e:
         conn.rollback()

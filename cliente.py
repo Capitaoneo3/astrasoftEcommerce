@@ -1,25 +1,36 @@
+import os  # Necessário para manipulação de arquivos/extensões
 from datetime import datetime, timedelta, timezone
+from io import BytesIO  # Necessário para send_file
 
 import jwt
 import psycopg2
-from flask import Blueprint, current_app, jsonify, request
+from flask import (  # Importado send_file
+    Blueprint,
+    current_app,
+    jsonify,
+    request,
+    send_file,
+)
 
-from auth import token_obrigatorio  # <--- Importação necessária do decorador
-
-# Importações de outros módulos
+from auth import token_obrigatorio  # Importação necessária do decorador
 from banco import get_db_connection
-
-# O Bcrypt é usado aqui, importado da instância inicializada em gestor.py
-from gestor import bcrypt
+from gestor import (  # Importando bcrypt e a instância do client do gestor.py
+    bcrypt,
+    client,
+)
 
 # Definição do Blueprint
 cliente_bp = Blueprint('cliente', __name__)
 
 
-# 8. Rota: Criar um novo Cliente (Cadastro)
+# 8. Rota: Criar um novo Cliente (Cadastro) - AGORA GERA TOKEN
 @cliente_bp.route('/cliente', methods=['POST'])
 def criar_cliente():
-    """Cria um novo cliente, gerando o hash da senha."""
+    """
+    POST /cliente
+    Cria um novo cliente, gerando o hash da senha e um token JWT.
+    Retorna: O ID do cliente criado e o token JWT.
+    """
     data = request.get_json()
     nome = data.get('nome')
     email = data.get('email')
@@ -53,12 +64,28 @@ def criar_cliente():
 
         cliente_id = resultado[0]
 
+        # 1. GERAÇÃO DO JWT após cadastro bem-sucedido (Alinhado com Gestor)
+        expiracao = datetime.now(timezone.utc) + timedelta(hours=24)
+        session_secret = current_app.config.get('SESSION_SECRET')
+
+        payload = {
+            'cliente_id': cliente_id,
+            'nome': nome,
+            'exp': expiracao,  # Expiração
+            'iat': datetime.now(timezone.utc),  # Emitido em
+            'role': 'cliente'
+        }
+
+        token = jwt.encode(payload, session_secret, algorithm='HS256')
+        # FIM GERAÇÃO JWT
+
         conn.commit()
         cur.close()
 
         return jsonify({
             "message": "Cliente criado com sucesso",
-            "cliente_id": cliente_id
+            "cliente_id": cliente_id,
+            "token": token # Retornando o token
         }), 201
 
     except psycopg2.errors.UniqueViolation:
@@ -144,20 +171,15 @@ def login_cliente():
             conn.close()
 
 
-## Rota 10. Meu Perfil (Protegida)
-
-
-# 10. Rota: Meu Perfil (Dados do Cliente Logado)
+# 10. Rota: Meu Perfil (Dados do Cliente Logado) - AGORA COM TOKEN REFRESH
 @cliente_bp.route('/cliente/meu-perfil', methods=['GET'])
 @token_obrigatorio(
-    'cliente')  # <--- AGORA ESTÁ CORRETO: Protegido APENAS para 'cliente'
-def meu_perfil(dados_usuario
-               ):  # Renomeado para 'dados_usuario' para ser mais genérico
+    'cliente')
+def meu_perfil(dados_usuario):
     """
-    Retorna os dados básicos do perfil do cliente logado,
-    usando o cliente_id extraído do token JWT.
+    GET /cliente/meu-perfil
+    Retorna os dados básicos do perfil do cliente logado e um token JWT atualizado.
     """
-    # O decorador garante que o token é válido e a role é 'cliente'.
     cliente_id_do_token = dados_usuario.get('cliente_id')
 
     conn = get_db_connection()
@@ -167,9 +189,9 @@ def meu_perfil(dados_usuario
     try:
         cur = conn.cursor()
 
-        # Seleciona apenas dados que não são sensíveis
+        # Seleciona dados básicos e a foto_perfil (nova coluna)
         cur.execute(
-            "SELECT cliente_id, nome, email, data_cadastro FROM clientes WHERE cliente_id = %s;",
+            "SELECT nome, email, data_cadastro, foto_perfil FROM clientes WHERE cliente_id = %s;",
             (cliente_id_do_token, ))
         cliente_perfil = cur.fetchone()
         cur.close()
@@ -177,16 +199,31 @@ def meu_perfil(dados_usuario
         if cliente_perfil is None:
             return jsonify({"error": "Cliente não encontrado."}), 404
 
-        # Mapeia o resultado da tupla para um dicionário
+        nome, email, data_cadastro, foto_perfil = cliente_perfil
+
+        # 1. REFRESH/GERAÇÃO DE NOVO TOKEN (Alinhado com Gestor)
+        expiracao = datetime.now(timezone.utc) + timedelta(hours=24)
+        session_secret = current_app.config.get('SESSION_SECRET')
+
+        payload = {
+            'cliente_id': cliente_id_do_token,
+            'nome': nome,
+            'exp': expiracao,
+            'iat': datetime.now(timezone.utc),
+            'role': 'cliente'
+        }
+
+        token = jwt.encode(payload, session_secret, algorithm='HS256')
+        # FIM REFRESH
+
+        # Mapeia o resultado para um dicionário
         perfil = {
-            "cliente_id":
-            cliente_perfil[0],
-            "nome":
-            cliente_perfil[1],
-            "email":
-            cliente_perfil[2],
-            "data_cadastro":
-            cliente_perfil[3].isoformat() if cliente_perfil[3] else None
+            "cliente_id": cliente_id_do_token,
+            "nome": nome,
+            "email": email,
+            "data_cadastro": data_cadastro.isoformat() if data_cadastro else None,
+            "foto_perfil": foto_perfil, # Retorna o nome do arquivo da foto
+            "token": token # Adiciona o token atualizado
         }
 
         return jsonify(perfil), 200
@@ -198,136 +235,242 @@ def meu_perfil(dados_usuario
     finally:
         if conn:
             conn.close()
-            # Continuação de cliente.py
-            # Nota: O GET para 'meu-perfil' já existe, o PUT e DELETE devem usar a mesma rota.
 
-            # 11. Rota Protegida: Atualizar Meu Perfil de Cliente
-            @cliente_bp.route('/cliente/meu-perfil', methods=['PUT'])
-            @token_obrigatorio('cliente')
-            def atualizar_cliente(dados_usuario):
-                """Permite ao cliente logado atualizar seu nome ou senha."""
-                cliente_id = dados_usuario.get('cliente_id')
-                data = request.get_json()
+# 11. Rota Protegida: Atualizar Meu Perfil de Cliente - AGORA USA MULTIPART/FORM-DATA E FOTO
+@cliente_bp.route('/cliente/meu-perfil', methods=['PUT'])
+@token_obrigatorio('cliente')
+def atualizar_cliente(dados_usuario):
+    """
+    PUT /cliente/meu-perfil
+    Permite ao cliente logado atualizar nome, email, senha ou foto de perfil.
+    Usa request.form e request.files para aceitar multipart/form-data.
+    """
+    cliente_id = dados_usuario.get('cliente_id')
 
-                # Campos que podem ser atualizados
-                nome = data.get('nome')
-                senha_plana = data.get('senha')
+    # Campos que podem ser atualizados (Usamos request.form para multipart/form-data)
+    nome = request.form.get('nome')
+    email = request.form.get('email') # Agora pode ser atualizado
+    senha_plana = request.form.get('senha')
+    foto = request.files.get('foto_perfil') # Agora lida com foto
 
-                updates = []
-                valores = []
+    updates = []
+    valores = []
 
-                if nome:
-                    updates.append("nome = %s")
-                    valores.append(nome)
+    if nome:
+        updates.append("nome = %s")
+        valores.append(nome)
 
-                if senha_plana:
-                    # Gera o hash seguro da nova senha
-                    senha_hash_seguro = bcrypt.generate_password_hash(
-                        senha_plana).decode('utf-8')
-                    updates.append("senha_hash = %s")
-                    valores.append(senha_hash_seguro)
+    if email:
+        updates.append("email = %s")
+        valores.append(email)
 
+    if senha_plana:
+        # Gera o hash seguro da nova senha
+        senha_hash_seguro = bcrypt.generate_password_hash(
+            senha_plana).decode('utf-8')
+        updates.append("senha_hash = %s")
+        valores.append(senha_hash_seguro)
+
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify(
+            {"error": "Falha na conexão com o banco de dados"}), 500
+
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                # --- Lógica de Upload de Foto (Alinhado com Gestor) ---
+                if foto:
+                    # 1. Buscar foto antiga do cliente para deletar
+                    cur.execute(
+                        "SELECT foto_perfil FROM clientes WHERE cliente_id = %s;",
+                        (cliente_id,)
+                    )
+                    resultado = cur.fetchone()
+                    foto_antiga = resultado[0] if resultado and resultado[0] else None
+
+                    # 2. Deletar foto antiga do storage se existir
+                    if foto_antiga:
+                        try:
+                            client.delete(foto_antiga, ignore_not_found=True)
+                        except Exception as e:
+                            print(f"Aviso: Erro ao deletar foto antiga do cliente: {e}")
+
+                    # 3. Fazer upload da nova foto
+                    extensao = os.path.splitext(foto.filename)[1] if foto.filename else '.jpg'
+                    nome_arquivo = f"cliente_{cliente_id}_perfil{extensao}"
+
+                    # Upload do arquivo para o storage
+                    client.upload_from_bytes(nome_arquivo, foto.read())
+
+                    # 4. Adicionar o caminho da nova foto aos updates do DB
+                    updates.append("foto_perfil = %s")
+                    valores.append(nome_arquivo)
+
+                # --- Verificação de Updates ---
                 if not updates:
                     return jsonify({
                         "error":
-                        "Nenhum dado (nome ou senha) fornecido para atualização."
+                        "Nenhum dado (nome, email, senha ou foto) fornecido para atualização."
                     }), 400
 
-                conn = get_db_connection()
-                if conn is None:
-                    return jsonify(
-                        {"error":
-                         "Falha na conexão com o banco de dados"}), 500
+                # --- Execução do SQL UPDATE ---
+                query = f"""
+                    UPDATE clientes 
+                    SET {', '.join(updates)}
+                    WHERE cliente_id = %s
+                    RETURNING cliente_id;
+                """
+                # Adiciona o ID do cliente para o filtro WHERE
+                valores.append(cliente_id)
 
-                try:
-                    cur = conn.cursor()
+                cur.execute(query, tuple(valores))
 
-                    query = f"""
-                        UPDATE clientes 
-                        SET {', '.join(updates)}
-                        WHERE cliente_id = %s
-                        RETURNING cliente_id;
-                    """
-                    # Adiciona o ID do cliente para o filtro WHERE
-                    valores.append(cliente_id)
-
-                    cur.execute(query, tuple(valores))
-
-                    if cur.rowcount == 0:
-                        conn.rollback()
-                        return jsonify({
-                            "error":
-                            "Cliente não encontrado para atualização."
-                        }), 404
-
-                    conn.commit()
-                    cur.close()
-
-                    return jsonify({
-                        "message":
-                        "Perfil de cliente atualizado com sucesso."
-                    }), 200
-
-                except Exception as e:
+                if cur.rowcount == 0:
                     conn.rollback()
-                    print(f"Erro ao atualizar cliente: {e}")
                     return jsonify({
                         "error":
-                        f"Erro interno ao atualizar perfil. Detalhe: {e}"
-                    }), 500
+                        "Cliente não encontrado para atualização."
+                    }), 404
 
-                finally:
-                    if conn:
-                        conn.close()
+                conn.commit()
 
-            # 12. Rota Protegida: Deletar Meu Perfil de Cliente
-            @cliente_bp.route('/cliente/meu-perfil', methods=['DELETE'])
-            @token_obrigatorio('cliente')
-            def deletar_cliente(dados_usuario):
-                """Permite ao cliente logado deletar sua própria conta."""
-                cliente_id = dados_usuario.get('cliente_id')
+        return jsonify({
+            "message":
+            "Perfil de cliente atualizado com sucesso."
+        }), 200
 
-                conn = get_db_connection()
-                if conn is None:
-                    return jsonify(
-                        {"error":
-                         "Falha na conexão com o banco de dados"}), 500
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback()
+        return jsonify({"error": "O novo email já está cadastrado."}), 409
+    except Exception as e:
+        conn.rollback()
+        print(f"Erro ao atualizar cliente: {e}")
+        return jsonify({
+            "error":
+            f"Erro interno ao atualizar perfil. Detalhe: {e}"
+        }), 500
 
-                try:
-                    cur = conn.cursor()
+    finally:
+        if conn:
+            conn.close()
 
-                    # Deletar o cliente
-                    query = "DELETE FROM clientes WHERE cliente_id = %s;"
-                    cur.execute(query, (cliente_id, ))
+# 12. Rota Protegida: Deletar Meu Perfil de Cliente
+@cliente_bp.route('/cliente/meu-perfil', methods=['DELETE'])
+@token_obrigatorio('cliente')
+def deletar_cliente(dados_usuario):
+    """Permite ao cliente logado deletar sua própria conta."""
+    cliente_id = dados_usuario.get('cliente_id')
 
-                    if cur.rowcount == 0:
-                        conn.rollback()
-                        return jsonify(
-                            {"error":
-                             "Cliente não encontrado para deleção."}), 404
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify(
+            {"error":
+             "Falha na conexão com o banco de dados"}), 500
 
-                    conn.commit()
-                    cur.close()
+    try:
+        cur = conn.cursor()
 
-                    return jsonify(
-                        {"message":
-                         "Conta de cliente deletada com sucesso."}), 200
+        # Antes de deletar a conta, busca a foto para deletar do storage (Alinhado com Gestor)
+        cur.execute(
+            "SELECT foto_perfil FROM clientes WHERE cliente_id = %s;",
+            (cliente_id,)
+        )
+        resultado = cur.fetchone()
+        foto_antiga = resultado[0] if resultado and resultado[0] else None
 
-                except Exception as e:
-                    conn.rollback()
-                    print(f"Erro ao deletar cliente: {e}")
-                    # Se houver pedidos ou outros dados associados
-                    if "foreign key constraint" in str(e).lower():
-                        return jsonify({
-                            "error":
-                            "Não é possível deletar a conta: Existem pedidos ou outros dados associados."
-                        }), 409
+        # Deletar o cliente do DB
+        query = "DELETE FROM clientes WHERE cliente_id = %s;"
+        cur.execute(query, (cliente_id, ))
 
-                    return jsonify({
-                        "error":
-                        f"Erro interno ao deletar cliente. Detalhe: {e}"
-                    }), 500
+        if cur.rowcount == 0:
+            conn.rollback()
+            return jsonify(
+                {"error":
+                 "Cliente não encontrado para deleção."}), 404
 
-                finally:
-                    if conn:
-                        conn.close()
+        # Se a exclusão no DB foi bem-sucedida, tenta deletar a foto do storage
+        if foto_antiga:
+            try:
+                client.delete(foto_antiga, ignore_not_found=True)
+            except Exception as e:
+                print(f"Aviso: Erro ao deletar foto antiga do cliente do storage: {e}")
+
+        conn.commit()
+        cur.close()
+
+        return jsonify(
+            {"message":
+             "Conta de cliente deletada com sucesso."}), 200
+
+    except Exception as e:
+        conn.rollback()
+        print(f"Erro ao deletar cliente: {e}")
+        # Se houver pedidos ou outros dados associados
+        if "foreign key constraint" in str(e).lower():
+            return jsonify({
+                "error":
+                "Não é possível deletar a conta: Existem pedidos ou outros dados associados."
+            }), 409
+
+        return jsonify({
+            "error":
+            f"Erro interno ao deletar cliente. Detalhe: {e}"
+        }), 500
+
+    finally:
+        if conn:
+            conn.close()
+
+# 13. Rota: Servir Foto de Perfil do Cliente - NOVA ROTA
+@cliente_bp.route("/cliente/foto/<int:cliente_id>", methods=["GET"])
+def obter_foto_cliente(cliente_id):
+    """
+    GET /cliente/foto/<cliente_id>
+    Retorna a foto de perfil do cliente a partir do Object Storage. (Alinhado com Gestor)
+    """
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify({"error": "Falha na conexão com o banco de dados"}), 500
+
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT foto_perfil FROM clientes WHERE cliente_id = %s;",
+            (cliente_id,)
+        )
+        resultado = cur.fetchone()
+        cur.close()
+
+        if not resultado or not resultado[0]:
+            return jsonify({"error": "Foto não encontrada"}), 404
+
+        foto_nome = resultado[0]
+
+        # Baixar foto do storage
+        foto_bytes = client.download_as_bytes(foto_nome)
+
+        # Determinar o tipo MIME baseado na extensão
+        extensao = os.path.splitext(foto_nome)[1].lower()
+        mime_types = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".gif": "image/gif",
+            ".webp": "image/webp"
+        }
+        mime_type = mime_types.get(extensao, "image/jpeg")
+
+        return send_file(
+            BytesIO(foto_bytes),
+            mimetype=mime_type,
+            as_attachment=False
+        )
+
+    except Exception as e:
+        print(f"Erro ao obter foto do cliente: {e}")
+        return jsonify({"error": "Erro ao carregar foto"}), 500
+
+    finally:
+        if conn:
+            conn.close()
