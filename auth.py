@@ -1,11 +1,11 @@
-# auth.py
-
 from functools import wraps
 
 import jwt
-from flask import current_app, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 from jwt import ExpiredSignatureError, InvalidSignatureError
 
+# 1. Definição do Blueprint para rotas de autenticação
+auth_bp = Blueprint('auth', __name__)
 
 # O decorador agora aceita o argumento role_necessaria
 def token_obrigatorio(role_necessaria):
@@ -69,3 +69,66 @@ def token_obrigatorio(role_necessaria):
         return decorated
 
     return decorator
+
+
+# Rota: Verificar Validade do Token (Gestor/Cliente)
+@auth_bp.route('/token/verificar', methods=['POST'])
+def verificar_token():
+    """
+    POST /token/verificar
+    Verifica se um token JWT está ativo, expirado ou inválido.
+    Aceita o token no cabeçalho Authorization ou no corpo JSON.
+    Requer: Token JWT.
+    Retorna: Status de validade (valid: true/false, expired: true/false).
+    """
+    # 1. Obter o token do cabeçalho Authorization (padrão)
+    token = request.headers.get('Authorization')
+    if token and token.startswith('Bearer '):
+        token = token.split(' ')[1]
+
+    # 2. Fallback: tentar obter do corpo JSON
+    if not token and request.is_json:
+        data = request.get_json()
+        token = data.get('token')
+
+    if not token:
+        return jsonify({"valid": False, "expired": False, "message": "Token não fornecido."}), 400
+
+    # 3. Tentar decodificar o token
+    try:
+        # A função jwt.decode, por padrão, verifica a expiração (exp)
+        decoded = jwt.decode(token, current_app.config['SESSION_SECRET'], algorithms=['HS256'])
+
+        # Token VÁLIDO
+        return jsonify({
+            "valid": True,
+            "expired": False,
+            "message": "Token JWT válido e ativo.",
+            "user_id": decoded.get('gestor_id') or decoded.get('cliente_id'), # Retorna o ID que estiver presente
+            "role": decoded.get('role')
+        }), 200
+
+    except jwt.ExpiredSignatureError:
+        # Token EXPIRADO
+        return jsonify({
+            "valid": False,
+            "expired": True,
+            "message": "Token JWT expirado."
+        }), 200 # OK 200 para checagem de status
+
+    except jwt.InvalidTokenError as e:
+        # Outros erros de token (assinatura inválida, formato errado, etc.)
+        print(f"Erro de token: {e}")
+        return jsonify({
+            "valid": False,
+            "expired": False,
+            "message": "Token JWT inválido ou malformado."
+        }), 401
+
+    except Exception as e:
+        print(f"Erro interno ao verificar token: {e}")
+        return jsonify({
+            "valid": False,
+            "expired": False,
+            "message": "Erro interno do servidor ao processar o token."
+        }), 500
