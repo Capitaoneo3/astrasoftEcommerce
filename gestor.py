@@ -1,19 +1,19 @@
-import os
 from datetime import datetime, timedelta, timezone
-from io import BytesIO
 
 import jwt
 import psycopg2
-from flask import Blueprint, current_app, jsonify, request, send_file
+from flask import Blueprint, current_app, jsonify, request
 from flask_bcrypt import Bcrypt
-from replit.object_storage import Client
 
 from auth import token_obrigatorio  # Importando o decorador de autenticação
+
+# Importações de outros módulos
 from banco import get_db_connection
 
-# 1. Instância do Bcrypt e Client
+# 1. Instância do Bcrypt
+# Criamos a instância do Bcrypt aqui, mas a inicialização com o app principal
+# (bcrypt.init_app(app)) ocorrerá em app.py para evitar dependências circulares.
 bcrypt = Bcrypt()
-client = Client() # Instância do client, agora exportada
 
 # 2. Definição do Blueprint
 gestor_bp = Blueprint('gestor', __name__)
@@ -22,12 +22,7 @@ gestor_bp = Blueprint('gestor', __name__)
 # 5. Rota: Criar um novo Gestor (Cadastro)
 @gestor_bp.route('/gestor', methods=['POST'])
 def criar_gestor():
-    """
-    POST /gestor
-    Cria um novo gestor no banco de dados e gera um token JWT.
-    Requer: JSON com 'nome', 'email' e 'senha'.
-    Retorna: O ID do gestor criado e o token JWT ou um erro (400, 409, 500).
-    """
+    """Cria um novo gestor, gerando o hash da senha."""
     data = request.get_json()
     nome = data.get('nome')
     email = data.get('email')
@@ -60,29 +55,12 @@ def criar_gestor():
 
         gestor_id = resultado[0]
 
-        # 1. GERAÇÃO DO JWT após cadastro bem-sucedido
-        expiracao = datetime.now(timezone.utc) + timedelta(hours=24)
-
-        payload = {
-            'gestor_id': gestor_id,
-            'nome': nome,
-            'exp': expiracao,  # Expiração
-            'iat': datetime.now(timezone.utc),  # Emitido em
-            'role': 'gestor'  # Define a função do usuário
-        }
-
-        token = jwt.encode(payload,
-                           current_app.config['SESSION_SECRET'],
-                           algorithm='HS256')
-        # FIM GERAÇÃO JWT
-
         conn.commit()
         cur.close()
 
         return jsonify({
             "message": "Gestor criado com sucesso",
-            "gestor_id": gestor_id,
-            "token": token  # Retornando o token
+            "gestor_id": gestor_id
         }), 201
 
     except psycopg2.errors.UniqueViolation:
@@ -102,12 +80,7 @@ def criar_gestor():
 # 6. Rota: Login do Gestor (Verificação de Senha e Geração de JWT)
 @gestor_bp.route('/login/gestor', methods=['POST'])
 def login_gestor():
-    """
-    POST /login/gestor
-    Verifica as credenciais do gestor e, se válidas, gera um token JWT.
-    Requer: JSON com 'email' e 'senha'.
-    Retorna: O 'gestor_id' e o 'token' JWT ou um erro (400, 401, 500).
-    """
+    """Verifica credenciais e gera um token JWT para o gestor."""
     data = request.get_json()
     email = data.get('email')
     senha_plana = data.get('senha')
@@ -170,15 +143,14 @@ def login_gestor():
 
 # 7. Rota: Meu Perfil do Gestor (Protegida)
 @gestor_bp.route('/gestor/meu-perfil', methods=['GET'])
-@token_obrigatorio('gestor')
-def obter_perfil_gestor(dados_usuario):
+@token_obrigatorio('gestor')  # Proteção de rota garantindo a role 'gestor'
+def meu_perfil_gestor(dados_usuario):
     """
-    GET /gestor/meu-perfil
-    Rota protegida. Retorna os dados do perfil do gestor logado e um token JWT atualizado.
-    Requer: Token JWT válido no cabeçalho Authorization.
-    Retorna: JSON com 'gestor_id', 'nome', 'email', 'foto_perfil' e 'token' (novo/refresh) ou erro (404, 500).
+    Retorna os dados básicos do perfil do gestor logado,
+    usando o gestor_id extraído do token JWT.
     """
-    gestor_id = dados_usuario.get('gestor_id')
+    # O decorador garante que o token é válido e a role é 'gestor'.
+    gestor_id_do_token = dados_usuario.get('gestor_id')
 
     conn = get_db_connection()
     if conn is None:
@@ -186,71 +158,55 @@ def obter_perfil_gestor(dados_usuario):
 
     try:
         cur = conn.cursor()
-        # Selecionamos apenas os campos necessários, EXCLUINDO senha_hash por segurança
+
+        # Seleciona apenas dados que não são sensíveis
         cur.execute(
-            "SELECT nome, email, foto_perfil FROM gestores WHERE gestor_id = %s;",
-            (gestor_id, )
-        )
-        gestor_data = cur.fetchone()
+            "SELECT gestor_id, nome, email, data_cadastro FROM gestores WHERE gestor_id = %s;",
+            (gestor_id_do_token, ))
+        gestor_perfil = cur.fetchone()
         cur.close()
 
-        if gestor_data is None:
+        if gestor_perfil is None:
+            # Isso só deve acontecer se o ID do token for válido mas o gestor foi deletado
             return jsonify({"error": "Gestor não encontrado."}), 404
 
-        nome, email, foto_perfil = gestor_data
-
-        # 1. REFRESH/GERAÇÃO DE NOVO TOKEN
-        # Criamos um novo token com base nos dados do usuário e do DB (nome atualizado)
-        expiracao = datetime.now(timezone.utc) + timedelta(hours=24) # Nova expiração
-
-        payload = {
-            'gestor_id': gestor_id,
-            'nome': nome, # Usar o nome mais atualizado do DB
-            'exp': expiracao,
-            'iat': datetime.now(timezone.utc),
-            'role': 'gestor'
+        # Mapeia o resultado da tupla para um dicionário
+        perfil = {
+            "gestor_id":
+            gestor_perfil[0],
+            "nome":
+            gestor_perfil[1],
+            "email":
+            gestor_perfil[2],
+            "data_cadastro":
+            gestor_perfil[3].isoformat() if gestor_perfil[3] else None
         }
 
-        token = jwt.encode(payload,
-                           current_app.config['SESSION_SECRET'],
-                           algorithm='HS256')
-        # FIM REFRESH
-
-        return jsonify({
-            "gestor_id": gestor_id,
-            "nome": nome,
-            "email": email,
-            # Retorna o nome do arquivo, que pode ser usado para a rota /gestor/foto/<id>
-            "foto_perfil": foto_perfil,
-            "token": token  # Adicionando o token atualizado
-        }), 200
+        return jsonify(perfil), 200
 
     except Exception as e:
-        print(f"Erro ao obter perfil do gestor: {e}")
-        return jsonify({"error": "Erro interno ao obter perfil."}), 500
+        print(f"Erro ao buscar perfil do gestor: {e}")
+        return jsonify({"error": "Erro interno ao buscar perfil."}), 500
 
     finally:
         if conn:
             conn.close()
 
 
+# Continuação de gestor.py
+
+
 # 8. Rota Protegida: Atualizar Meu Perfil de Gestor
 @gestor_bp.route('/gestor/meu-perfil', methods=['PUT'])
 @token_obrigatorio('gestor')
 def atualizar_gestor(dados_usuario):
-    """
-    PUT /gestor/meu-perfil
-    Rota protegida. Permite ao gestor logado atualizar seu nome, email, senha ou foto de perfil.
-    Requer: Token JWT válido e dados de formulário ('nome', 'email', 'senha' ou 'foto_perfil').
-    Retorna: Mensagem de sucesso ou erro (400, 404, 500).
-    """
+    """Permite ao gestor logado atualizar seu nome ou senha."""
     gestor_id = dados_usuario.get('gestor_id')
+    data = request.get_json()
 
-    # Campos que podem ser atualizados (Usamos request.form para multipart/form-data)
-    nome = request.form.get('nome')
-    email = request.form.get('email')
-    senha_plana = request.form.get('senha')
-    foto = request.files.get('foto_perfil')
+    # Campos que podem ser atualizados
+    nome = data.get('nome')
+    senha_plana = data.get('senha')
 
     updates = []
     valores = []
@@ -259,89 +215,53 @@ def atualizar_gestor(dados_usuario):
         updates.append("nome = %s")
         valores.append(nome)
 
-    if email:
-        updates.append("email = %s")
-        valores.append(email)
-
     if senha_plana:
-        # Gera o hash seguro da nova senha (Melhor Prática!)
-        senha_hash_seguro = bcrypt.generate_password_hash(senha_plana).decode('utf-8')
+        # Gera o hash seguro da nova senha
+        senha_hash_seguro = bcrypt.generate_password_hash(senha_plana).decode(
+            'utf-8')
         updates.append("senha_hash = %s")
         valores.append(senha_hash_seguro)
+
+    if not updates:
+        return jsonify({
+            "error":
+            "Nenhum dado (nome ou senha) fornecido para atualização."
+        }), 400
 
     conn = get_db_connection()
     if conn is None:
         return jsonify({"error": "Falha na conexão com o banco de dados"}), 500
 
     try:
-        # USA 'with conn:' e 'with conn.cursor() as cur:' para garantir fechamento
-        with conn:
-            with conn.cursor() as cur:
+        cur = conn.cursor()
 
-                # --- Lógica de Upload de Foto ---
-                if foto:
-                    # 1. Buscar foto antiga do gestor para deletar
-                    cur.execute(
-                        "SELECT foto_perfil FROM gestores WHERE gestor_id = %s;",
-                        (gestor_id,)
-                    )
-                    resultado = cur.fetchone()
-                    foto_antiga = resultado[0] if resultado and resultado[0] else None
+        query = f"""
+            UPDATE gestores 
+            SET {', '.join(updates)}
+            WHERE gestor_id = %s
+            RETURNING gestor_id;
+        """
+        # Adiciona o ID do gestor para o filtro WHERE
+        valores.append(gestor_id)
 
-                    # 2. Deletar foto antiga do storage se existir
-                    if foto_antiga:
-                        try:
-                            client.delete(foto_antiga, ignore_not_found=True)
-                        except Exception as e:
-                            print(f"Aviso: Erro ao deletar foto antiga, mas a atualização continua: {e}")
+        cur.execute(query, tuple(valores))
 
-                    # 3. Fazer upload da nova foto
-                    extensao = os.path.splitext(foto.filename)[1] if foto.filename else '.jpg'
-                    nome_arquivo = f"gestor_{gestor_id}_perfil{extensao}"
+        if cur.rowcount == 0:
+            conn.rollback()
+            return jsonify(
+                {"error": "Gestor não encontrado para atualização."}), 404
 
-                    # Upload do arquivo para o storage
-                    client.upload_from_bytes(nome_arquivo, foto.read())
+        conn.commit()
+        cur.close()
 
-                    # 4. Adicionar o caminho da nova foto aos updates do DB
-                    updates.append("foto_perfil = %s")
-                    valores.append(nome_arquivo)
-
-                # --- Verificação de Updates ---
-                if not updates:
-                    return jsonify({
-                        "error":
-                        "Nenhum dado (nome, email, senha ou foto) fornecido para atualização."
-                    }), 400
-
-                # --- Execução do SQL UPDATE ---
-                query = f"""
-                    UPDATE gestores 
-                    SET {', '.join(updates)}
-                    WHERE gestor_id = %s;
-                """
-                # Adiciona o ID do gestor para o filtro WHERE
-                valores.append(gestor_id)
-
-                cur.execute(query, tuple(valores))
-
-                if cur.rowcount == 0:
-                    conn.rollback()
-                    return jsonify(
-                        {"error": "Gestor não encontrado para atualização."}), 404
-
-                # O commit é crucial, feito dentro do 'with conn:'
-                conn.commit()
-
-        # Resposta de Sucesso
         return jsonify({"message":
                         "Perfil de gestor atualizado com sucesso."}), 200
 
     except Exception as e:
-        # Se ocorrer qualquer erro, faz o rollback e loga o erro
         conn.rollback()
         print(f"Erro ao atualizar gestor: {e}")
         return jsonify(
-            {"error": "Erro interno ao atualizar perfil."}), 500
+            {"error": f"Erro interno ao atualizar perfil. Detalhe: {e}"}), 500
 
     finally:
         if conn:
@@ -352,12 +272,7 @@ def atualizar_gestor(dados_usuario):
 @gestor_bp.route('/gestor/meu-perfil', methods=['DELETE'])
 @token_obrigatorio('gestor')
 def deletar_gestor(dados_usuario):
-    """
-    DELETE /gestor/meu-perfil
-    Rota protegida. Permite ao gestor logado deletar sua própria conta.
-    Requer: Token JWT válido no cabeçalho Authorization.
-    Retorna: Mensagem de sucesso ou erro (404, 409, 500).
-    """
+    """Permite ao gestor logado deletar sua própria conta."""
     gestor_id = dados_usuario.get('gestor_id')
 
     conn = get_db_connection()
@@ -374,13 +289,13 @@ def deletar_gestor(dados_usuario):
         if cur.rowcount == 0:
             conn.rollback()
             return jsonify({"error":
-                               "Gestor não encontrado para deleção."}), 404
+                            "Gestor não encontrado para deleção."}), 404
 
         conn.commit()
         cur.close()
 
         return jsonify({"message":
-                               "Conta de gestor deletada com sucesso."}), 200
+                        "Conta de gestor deletada com sucesso."}), 200
 
     except Exception as e:
         conn.rollback()
@@ -394,62 +309,6 @@ def deletar_gestor(dados_usuario):
 
         return jsonify(
             {"error": f"Erro interno ao deletar gestor. Detalhe: {e}"}), 500
-
-    finally:
-        if conn:
-            conn.close()
-
-
-# 10. Rota: Servir Foto de Perfil do Gestor
-@gestor_bp.route("/gestor/foto/<int:gestor_id>", methods=["GET"])
-def obter_foto_gestor(gestor_id):
-    """
-    GET /gestor/foto/<gestor_id>
-    Retorna a foto de perfil do gestor a partir do Object Storage.
-    Requer: O ID do gestor na URL.
-    Retorna: O arquivo de imagem binário (Content-Type apropriado) ou erro (404, 500).
-    """
-    conn = get_db_connection()
-    if conn is None:
-        return jsonify({"error": "Falha na conexão com o banco de dados"}), 500
-
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT foto_perfil FROM gestores WHERE gestor_id = %s;",
-            (gestor_id,)
-        )
-        resultado = cur.fetchone()
-        cur.close()
-
-        if not resultado or not resultado[0]:
-            return jsonify({"error": "Foto não encontrada"}), 404
-
-        foto_nome = resultado[0]
-
-        # Baixar foto do storage
-        foto_bytes = client.download_as_bytes(foto_nome)
-
-        # Determinar o tipo MIME baseado na extensão
-        extensao = os.path.splitext(foto_nome)[1].lower()
-        mime_types = {
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".png": "image/png",
-            ".gif": "image/gif",
-            ".webp": "image/webp"
-        }
-        mime_type = mime_types.get(extensao, "image/jpeg")
-
-        return send_file(
-            BytesIO(foto_bytes),
-            mimetype=mime_type,
-            as_attachment=False
-        )
-
-    except Exception as e:
-        print(f"Erro ao obter foto do gestor: {e}")
-        return jsonify({"error": "Erro ao carregar foto"}), 500
 
     finally:
         if conn:
