@@ -287,7 +287,7 @@ def deletar_cliente(dados_usuario):
             conn.close()
 
 
-@cliente_bp.route('/cliente/meu-perfil', methods=['PUT'])  #
+@cliente_bp.route('/cliente/meu-perfil', methods=['PUT'])  
 @token_obrigatorio('cliente')
 def atualizar_cliente(dados_usuario):
 
@@ -400,7 +400,7 @@ def atualizar_cliente(dados_usuario):
 
 
 # 13. Rota: Servir Foto de Perfil do Cliente
-@cliente_bp.route("/foto/<int:cliente_id>", methods=["GET"])
+@cliente_bp.route("/cliente/foto/<int:cliente_id>", methods=["GET"])
 def obter_foto_cliente(cliente_id):
 
     conn = get_db_connection()

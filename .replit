@@ -24,7 +24,7 @@ externalPort = 8080
 expertMode = true
 
 [workflows]
-runButton = "Project"
+runButton = "Server"
 
 [[workflows.workflow]]
 name = "start"
