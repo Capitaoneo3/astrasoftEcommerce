@@ -189,7 +189,7 @@ def meu_perfil(dados_usuario):
 
         # Seleciona dados do perfil
         cur.execute(
-            "SELECT cliente_id, nome, email, data_cadastro FROM clientes WHERE cliente_id = %s;",
+            "SELECT cliente_id, nome, email, data_cadastro , foto_perfil FROM clientes WHERE cliente_id = %s;",
             (cliente_id, ))
         cliente_perfil = cur.fetchone()
         cur.close()
@@ -198,14 +198,15 @@ def meu_perfil(dados_usuario):
             return jsonify({"error": "Cliente não encontrado."}), 404
 
         # Mapeia o resultado da tupla para variáveis e dicionário de perfil
-        c_id, nome, email, data_cadastro = cliente_perfil
+        c_id, nome, email, data_cadastro , foto_perfil = cliente_perfil
 
         perfil = {
             "cliente_id": c_id,
             "nome": nome,
             "email": email,
             "data_cadastro":
-            data_cadastro.isoformat() if data_cadastro else None
+            data_cadastro.isoformat() if data_cadastro else None,
+            "foto_perfil": foto_perfil
         }
 
         # 1. REFRESH/GERAÇÃO DE NOVO TOKEN
