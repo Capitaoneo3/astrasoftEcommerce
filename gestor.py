@@ -172,12 +172,7 @@ def login_gestor():
 @gestor_bp.route('/gestor/meu-perfil', methods=['GET'])
 @token_obrigatorio('gestor')
 def obter_perfil_gestor(dados_usuario):
-    """
-    GET /gestor/meu-perfil
-    Rota protegida. Retorna os dados do perfil do gestor logado e um token JWT atualizado.
-    Requer: Token JWT válido no cabeçalho Authorization.
-    Retorna: JSON com 'gestor_id', 'nome', 'email', 'foto_perfil' e 'token' (novo/refresh) ou erro (404, 500).
-    """
+
     gestor_id = dados_usuario.get('gestor_id')
 
     conn = get_db_connection()
@@ -233,13 +228,58 @@ def obter_perfil_gestor(dados_usuario):
         if conn:
             conn.close()
 
-# 8. Rota: Buscar Gestor por ID (Potencialmente Protegida)
-@gestor_bp.route('/gestor/<int:gestor_id_url>', methods=['GET'])
-# Se esta rota só puder ser acessada por administradores ou super-usuários, você deve protegê-la.
-# Ex: @token_obrigatorio('admin')
+# 8. Rota Protegida: Deletar Meu Perfil de Gestor
+@gestor_bp.route('/gestor/meu-perfil', methods=['DELETE'])
+@token_obrigatorio('gestor')
+def deletar_gestor(dados_usuario):
+    """
+    DELETE /gestor/meu-perfil
+    Rota protegida. Permite ao gestor logado deletar sua própria conta.
+    Requer: Token JWT válido no cabeçalho Authorization.
+    Retorna: Mensagem de sucesso ou erro (404, 409, 500).
+    """
+    gestor_id = dados_usuario.get('gestor_id')
 
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify({"error": "Falha na conexão com o banco de dados"}), 500
 
-# 8. Rota Protegida: Atualizar Meu Perfil de Gestor
+    try:
+        cur = conn.cursor()
+
+        # Deletar o gestor
+        query = "DELETE FROM gestores WHERE gestor_id = %s;"
+        cur.execute(query, (gestor_id, ))
+
+        if cur.rowcount == 0:
+            conn.rollback()
+            return jsonify({"error":
+                            "Gestor não encontrado para deleção."}), 404
+
+        conn.commit()
+        cur.close()
+
+        return jsonify({"message":
+                            "Conta de gestor deletada com sucesso."}), 200
+
+    except Exception as e:
+        conn.rollback()
+        print(f"Erro ao deletar gestor: {e}")
+        # Nota: Se o gestor tiver lojas associadas, a deleção pode falhar devido à FK.
+        if "foreign key constraint" in str(e).lower():
+            return jsonify({
+                "error":
+                "Não é possível deletar a conta: Você possui lojas cadastradas. Por favor, remova todas as lojas primeiro."
+            }), 409
+
+        return jsonify(
+            {"error": f"Erro interno ao deletar gestor. Detalhe: {e}"}), 500
+
+    finally:
+        if conn:
+            conn.close()
+            
+# 9. Rota Protegida: Atualizar Meu Perfil de Gestor
 @gestor_bp.route('/gestor/meu-perfil', methods=['PUT'])
 @token_obrigatorio('gestor')
 def atualizar_gestor(dados_usuario):
@@ -359,56 +399,7 @@ def atualizar_gestor(dados_usuario):
             conn.close()
 
 
-# 9. Rota Protegida: Deletar Meu Perfil de Gestor
-@gestor_bp.route('/gestor/meu-perfil', methods=['DELETE'])
-@token_obrigatorio('gestor')
-def deletar_gestor(dados_usuario):
-    """
-    DELETE /gestor/meu-perfil
-    Rota protegida. Permite ao gestor logado deletar sua própria conta.
-    Requer: Token JWT válido no cabeçalho Authorization.
-    Retorna: Mensagem de sucesso ou erro (404, 409, 500).
-    """
-    gestor_id = dados_usuario.get('gestor_id')
 
-    conn = get_db_connection()
-    if conn is None:
-        return jsonify({"error": "Falha na conexão com o banco de dados"}), 500
-
-    try:
-        cur = conn.cursor()
-
-        # Deletar o gestor
-        query = "DELETE FROM gestores WHERE gestor_id = %s;"
-        cur.execute(query, (gestor_id, ))
-
-        if cur.rowcount == 0:
-            conn.rollback()
-            return jsonify({"error":
-                            "Gestor não encontrado para deleção."}), 404
-
-        conn.commit()
-        cur.close()
-
-        return jsonify({"message":
-                            "Conta de gestor deletada com sucesso."}), 200
-
-    except Exception as e:
-        conn.rollback()
-        print(f"Erro ao deletar gestor: {e}")
-        # Nota: Se o gestor tiver lojas associadas, a deleção pode falhar devido à FK.
-        if "foreign key constraint" in str(e).lower():
-            return jsonify({
-                "error":
-                "Não é possível deletar a conta: Você possui lojas cadastradas. Por favor, remova todas as lojas primeiro."
-            }), 409
-
-        return jsonify(
-            {"error": f"Erro interno ao deletar gestor. Detalhe: {e}"}), 500
-
-    finally:
-        if conn:
-            conn.close()
 
 
 # 10. Rota: Servir Foto de Perfil do Gestor
