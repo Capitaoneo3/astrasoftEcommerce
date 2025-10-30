@@ -15,15 +15,15 @@ loja_bp = Blueprint('loja', __name__)
 
 # Rota 7 (Atualizada): Criar uma nova Loja (POST)
 @loja_bp.route('/loja', methods=['POST'])
-@token_obrigatorio(role_necessaria='gestor') # 🛡️ Acesso somente para gestores
-def criar_loja(dados_usuario): # Recebe o payload do token
+@token_obrigatorio(role_necessaria='gestor')  # 🛡️ Acesso somente para gestores
+def criar_loja(dados_usuario):  # Recebe o payload do token
     """Cria uma nova loja, associando-a ao gestor autenticado. 'descricao' é opcional."""
     gestor_id_logado = dados_usuario.get('gestor_id')
 
     data = request.get_json()
     nome_loja = data.get('nome_loja')
     # NOVO: O campo 'descricao' é opcional e pode ser None
-    descricao = data.get('descricao') 
+    descricao = data.get('descricao')
 
     required_fields = [
         'nome_loja', 'endereco_rua', 'endereco_cidade', 'endereco_estado',
@@ -47,29 +47,42 @@ def criar_loja(dados_usuario): # Recebe o payload do token
             RETURNING loja_id, gestor_id, nome_loja, descricao, endereco_rua, endereco_cidade, endereco_estado, endereco_cep, latitude, longitude, data_criacao;
         """
         # ATUALIZAÇÃO: Inclusão do 'descricao' nos valores
-        cur.execute(query, (gestor_id_logado, nome_loja, descricao, data['endereco_rua'],
-                            data['endereco_cidade'], data['endereco_estado'],
-                            data['endereco_cep']))
+        cur.execute(query, (gestor_id_logado, nome_loja, descricao,
+                            data['endereco_rua'], data['endereco_cidade'],
+                            data['endereco_estado'], data['endereco_cep']))
 
         resultado_completo = cur.fetchone()
 
         if resultado_completo is None:
             raise Exception(
-                "O banco de dados não retornou os dados da loja após a inserção.")
+                "O banco de dados não retornou os dados da loja após a inserção."
+            )
 
         # Mapeamento do resultado
         loja_criada = {
-            "loja_id": resultado_completo[0],
-            "gestor_id": resultado_completo[1],
-            "nome_loja": resultado_completo[2],
-            "descricao": resultado_completo[3],
-            "endereco_rua": resultado_completo[4],
-            "endereco_cidade": resultado_completo[5],
-            "endereco_estado": resultado_completo[6],
-            "endereco_cep": resultado_completo[7],
-            "latitude": resultado_completo[8],
-            "longitude": resultado_completo[9],
-            "data_criacao": resultado_completo[10].isoformat() if resultado_completo[10] else None
+            "loja_id":
+            resultado_completo[0],
+            "gestor_id":
+            resultado_completo[1],
+            "nome_loja":
+            resultado_completo[2],
+            "descricao":
+            resultado_completo[3],
+            "endereco_rua":
+            resultado_completo[4],
+            "endereco_cidade":
+            resultado_completo[5],
+            "endereco_estado":
+            resultado_completo[6],
+            "endereco_cep":
+            resultado_completo[7],
+            "latitude":
+            resultado_completo[8],
+            "longitude":
+            resultado_completo[9],
+            "data_criacao":
+            resultado_completo[10].isoformat()
+            if resultado_completo[10] else None
         }
 
         conn.commit()
@@ -90,7 +103,7 @@ def criar_loja(dados_usuario): # Recebe o payload do token
         conn.rollback()
         print(f"Erro ao criar loja: {e}")
         return jsonify({"error":
-                            f"Erro interno ao criar loja. Detalhe: {e}"}), 500
+                        f"Erro interno ao criar loja. Detalhe: {e}"}), 500
 
     finally:
         if conn:
@@ -143,7 +156,7 @@ def listar_todas_lojas():
 
 # 9. Rota Protegida: Listar Lojas do Gestor Logado
 @loja_bp.route('/gestor/minhas-lojas', methods=['GET'])
-@token_obrigatorio(role_necessaria='gestor') # 🛡️ Acesso somente para gestores
+@token_obrigatorio(role_necessaria='gestor')  # 🛡️ Acesso somente para gestores
 def listar_lojas_do_gestor(dados_usuario):
     """Retorna uma lista de lojas cadastradas pelo gestor autenticado, com todos os detalhes."""
     gestor_id_logado = dados_usuario.get('gestor_id')
@@ -171,13 +184,13 @@ def listar_lojas_do_gestor(dados_usuario):
             "loja_id": row[0],
             "gestor_id": row[1],
             "nome_loja": row[2],
-            "descricao": row[3],      
+            "descricao": row[3],
             "endereco_rua": row[4],
             "endereco_cidade": row[5],
             "endereco_estado": row[6],
             "endereco_cep": row[7],
-            "latitude": row[8],          
-            "longitude": row[9],         
+            "latitude": row[8],
+            "longitude": row[9],
             "data_criacao": row[10].isoformat() if row[10] else None
         } for row in lojas_data]
 
@@ -191,10 +204,11 @@ def listar_lojas_do_gestor(dados_usuario):
         if conn:
             conn.close()
 
+
 # 10. Deletar uma Loja por ID
 @loja_bp.route('/loja/<int:loja_id>', methods=['DELETE'])
-@token_obrigatorio(role_necessaria='gestor') # 🛡️ Acesso somente para gestores
-def deletar_loja(loja_id, dados_usuario): 
+@token_obrigatorio(role_necessaria='gestor')  # 🛡️ Acesso somente para gestores
+def deletar_loja(dados_usuario, loja_id):
     """Exclui uma loja específica pelo ID, garantindo que o gestor autenticado é o proprietário."""
     gestor_id_logado = dados_usuario.get('gestor_id')
 
@@ -220,31 +234,36 @@ def deletar_loja(loja_id, dados_usuario):
 
             # Verificação extra para dar um feedback mais preciso:
             cur_check = conn.cursor()
-            cur_check.execute("SELECT loja_id FROM lojas WHERE loja_id = %s;", (loja_id,))
+            cur_check.execute("SELECT loja_id FROM lojas WHERE loja_id = %s;",
+                              (loja_id, ))
             loja_existe = cur_check.fetchone()
             cur_check.close()
 
             if loja_existe:
                 return jsonify({
-                    "error": "Acesso negado. Você só pode deletar lojas que gerencia."
-                }), 403 # Forbidden
+                    "error":
+                    "Acesso negado. Você só pode deletar lojas que gerencia."
+                }), 403  # Forbidden
             else:
                 return jsonify({
-                    "error": f"Loja com ID {loja_id} não encontrada."
-                }), 404 # Not Found
+                    "error":
+                    f"Loja com ID {loja_id} não encontrada."
+                }), 404  # Not Found
 
         nome_loja = nome_loja_deletada[0]
         conn.commit()
         cur.close()
 
         return jsonify({
-            "message": f"Loja '{nome_loja}' (ID: {loja_id}) deletada com sucesso."
+            "message":
+            f"Loja '{nome_loja}' (ID: {loja_id}) deletada com sucesso."
         }), 200
 
     except Exception as e:
         conn.rollback()
         print(f"Erro ao deletar loja: {e}")
-        return jsonify({"error": f"Erro interno ao deletar loja. Detalhe: {e}"}), 500
+        return jsonify(
+            {"error": f"Erro interno ao deletar loja. Detalhe: {e}"}), 500
 
     finally:
         if conn:
@@ -314,9 +333,10 @@ def obter_foto_loja(loja_id):
         if conn:
             conn.close()
 
+
 # 📌 Rota 11 (Atualização): Atualizar uma Loja (PUT)
 @loja_bp.route('/loja/<int:loja_id>', methods=['PUT'])
-@token_obrigatorio(role_necessaria='gestor') # 🛡️ Acesso somente para gestores
+@token_obrigatorio(role_necessaria='gestor')  # 🛡️ Acesso somente para gestores
 def atualizar_loja(dados_usuario, loja_id):
     """
     Atualiza dados da loja e a imagem de perfil (foto_loja).
@@ -338,13 +358,13 @@ def atualizar_loja(dados_usuario, loja_id):
     latitude = request.form.get('latitude')
     longitude = request.form.get('longitude')
 
-    # Se o valor for uma string vazia (""), converte para None. 
-    # Isso é útil para garantir que strings vazias sejam tratadas como valores "não enviados" 
+    # Se o valor for uma string vazia (""), converte para None.
+    # Isso é útil para garantir que strings vazias sejam tratadas como valores "não enviados"
     # e não causem erro no banco de dados para campos NUMERIC.
     latitude = latitude if latitude else None
     longitude = longitude if longitude else None
 
-    foto_loja = request.files.get('foto_loja') # Captura o arquivo da imagem
+    foto_loja = request.files.get('foto_loja')  # Captura o arquivo da imagem
 
     updates = []
     valores = []
@@ -354,7 +374,7 @@ def atualizar_loja(dados_usuario, loja_id):
         updates.append("nome_loja = %s")
         valores.append(nome_loja)
 
-    # TRATAMENTO CORRETO DE CAMPO OPCIONAL DE TEXTO: 
+    # TRATAMENTO CORRETO DE CAMPO OPCIONAL DE TEXTO:
     # Permite None (não enviado) ou "" (enviado vazio)
     if descricao is not None:
         updates.append("descricao = %s")
@@ -384,7 +404,8 @@ def atualizar_loja(dados_usuario, loja_id):
     # 3. Verificação preliminar antes de abrir a conexão
     if not updates and not foto_loja:
         return jsonify({
-        "error": "Nenhum dado fornecido para atualização. Forneça pelo menos um campo ou uma imagem."
+            "error":
+            "Nenhum dado fornecido para atualização. Forneça pelo menos um campo ou uma imagem."
         }), 400
 
     conn = get_db_connection()
@@ -397,13 +418,14 @@ def atualizar_loja(dados_usuario, loja_id):
         # --- 3. Busca inicial para PROPRIEDADE (SEMPRE NECESSÁRIO) ---
         # Busca foto_loja (para deletar) e gestor_id (para verificar propriedade)
         cur.execute(
-        "SELECT foto_loja, gestor_id FROM lojas WHERE loja_id = %s;",
-        (loja_id, ))
+            "SELECT foto_loja, gestor_id FROM lojas WHERE loja_id = %s;",
+            (loja_id, ))
         resultado_loja = cur.fetchone()
 
         if not resultado_loja:
             conn.rollback()
-            return jsonify({"error": f"Loja com ID {loja_id} não encontrada."}), 404
+            return jsonify({"error":
+                            f"Loja com ID {loja_id} não encontrada."}), 404
 
         foto_antiga = resultado_loja[0]
         proprietario_id = resultado_loja[1]
@@ -412,8 +434,9 @@ def atualizar_loja(dados_usuario, loja_id):
         if proprietario_id != gestor_id_logado:
             conn.rollback()
             return jsonify({
-            "error": "Acesso negado. Você só pode atualizar lojas que gerencia."
-            }), 403 # Forbidden
+                "error":
+                "Acesso negado. Você só pode atualizar lojas que gerencia."
+            }), 403  # Forbidden
 
         # --- Lógica de Upload de Foto (Se houver arquivo) ---
         if foto_loja:
@@ -425,12 +448,12 @@ def atualizar_loja(dados_usuario, loja_id):
                     client.delete(foto_antiga, ignore_not_found=True)
                 except Exception as e:
                     print(
-                    f"Aviso: Erro ao deletar foto antiga, mas a atualização continua: {e}"
+                        f"Aviso: Erro ao deletar foto antiga, mas a atualização continua: {e}"
                     )
 
             # 3.3. Fazer upload da nova foto
             extensao = os.path.splitext(
-            foto_loja.filename)[1] if foto_loja.filename else '.jpg'
+                foto_loja.filename)[1] if foto_loja.filename else '.jpg'
             nome_arquivo = f"loja_{loja_id}_perfil{extensao}"
 
             # OBS: Você precisa garantir que 'client' (para o storage) e 'os' foram importados
@@ -457,21 +480,22 @@ def atualizar_loja(dados_usuario, loja_id):
             cur.close()
 
             return jsonify(
-            {"message": f"Loja (ID: {loja_id}) atualizada com sucesso."}), 200
+                {"message":
+                 f"Loja (ID: {loja_id}) atualizada com sucesso."}), 200
 
         # Caso chegue aqui sem updates, mas com foto_loja = False,
         # o erro 400 inicial já deveria ter sido pego.
         # Este else/retorno é apenas um fallback.
         return jsonify({
-            "error": "Nenhum dado fornecido para atualização. Forneça pelo menos um campo ou uma imagem."
-            }), 400
-
+            "error":
+            "Nenhum dado fornecido para atualização. Forneça pelo menos um campo ou uma imagem."
+        }), 400
 
     except Exception as e:
         conn.rollback()
         print(f"Erro ao atualizar loja: {e}")
         return jsonify(
-        {"error": f"Erro interno ao atualizar loja. Detalhe: {e}"}), 500
+            {"error": f"Erro interno ao atualizar loja. Detalhe: {e}"}), 500
 
     finally:
         if conn:
