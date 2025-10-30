@@ -254,7 +254,7 @@ def deletar_loja(loja_id, dados_usuario):
 # 📌 Rota 11 (Atualização): Atualizar uma Loja (PUT)
 @loja_bp.route('/loja/<int:loja_id>', methods=['PUT'])
 @token_obrigatorio(role_necessaria='gestor') # 🛡️ Acesso somente para gestores
-def atualizar_loja(loja_id, dados_usuario): # Recebe o ID da loja e o payload do token
+def atualizar_loja(dados_usuario, loja_id):
     """
     Atualiza dados da loja e a imagem de perfil (foto_loja).
     Requer multipart/form-data e acesso do gestor proprietário.
@@ -264,8 +264,7 @@ def atualizar_loja(loja_id, dados_usuario): # Recebe o ID da loja e o payload do
 
     # 1. Captura dos dados do formulário (multipart/form-data)
     nome_loja = request.form.get('nome_loja')
-    # O campo 'descricao' já está corretamente tratado como opcional
-    descricao = request.form.get('descricao') 
+    descricao = request.form.get('descricao')
     endereco_rua = request.form.get('endereco_rua')
     endereco_cidade = request.form.get('endereco_cidade')
     endereco_estado = request.form.get('endereco_estado')
@@ -284,8 +283,7 @@ def atualizar_loja(loja_id, dados_usuario): # Recebe o ID da loja e o payload do
         valores.append(nome_loja)
 
     # TRATAMENTO CORRETO DE CAMPO OPCIONAL:
-    # 'is not None' permite que o usuário envie a descrição com string vazia ou explicitamente nula (se permitido pelo BD)
-    if descricao is not None: 
+    if descricao is not None:
         updates.append("descricao = %s")
         valores.append(descricao)
 
@@ -311,7 +309,7 @@ def atualizar_loja(loja_id, dados_usuario): # Recebe o ID da loja e o payload do
     # 3. Verificação preliminar antes de abrir a conexão
     if not updates and not foto_loja:
         return jsonify({
-            "error": "Nenhum dado fornecido para atualização. Forneça pelo menos um campo ou uma imagem."
+        "error": "Nenhum dado fornecido para atualização. Forneça pelo menos um campo ou uma imagem."
         }), 400
 
     conn = get_db_connection()
@@ -321,94 +319,88 @@ def atualizar_loja(loja_id, dados_usuario): # Recebe o ID da loja e o payload do
     try:
         cur = conn.cursor()
 
-        # --- Lógica de Upload de Foto ---
+        # --- 3. Busca inicial para PROPRIEDADE (SEMPRE NECESSÁRIO) ---
+        # Busca foto_loja (para deletar) e gestor_id (para verificar propriedade)
+        cur.execute(
+        "SELECT foto_loja, gestor_id FROM lojas WHERE loja_id = %s;",
+        (loja_id, ))
+        resultado_loja = cur.fetchone()
+
+        if not resultado_loja:
+            conn.rollback()
+            return jsonify({"error": f"Loja com ID {loja_id} não encontrada."}), 404
+
+        foto_antiga = resultado_loja[0]
+        proprietario_id = resultado_loja[1]
+
+        # 3.1. Validação de Propriedade (para qualquer tipo de update)
+        if proprietario_id != gestor_id_logado:
+            conn.rollback()
+            return jsonify({
+            "error": "Acesso negado. Você só pode atualizar lojas que gerencia."
+            }), 403 # Forbidden
+
+        # --- Lógica de Upload de Foto (Se houver arquivo) ---
         if foto_loja:
-            # 3.1. Buscar foto antiga do cliente para deletar e verificar propriedade
-            cur.execute(
-                "SELECT foto_loja, gestor_id FROM lojas WHERE loja_id = %s;",
-                (loja_id, ))
-            resultado_loja = cur.fetchone()
+            # A busca e a validação de propriedade JÁ foram feitas acima.
 
-            if not resultado_loja:
-                conn.rollback()
-                return jsonify({"error": f"Loja com ID {loja_id} não encontrada."}), 404
-
-            foto_antiga = resultado_loja[0]
-            proprietario_id = resultado_loja[1]
-
-            # 3.2. Validação de Propriedade
-            if proprietario_id != gestor_id_logado:
-                conn.rollback()
-                return jsonify({
-                    "error": "Acesso negado. Você só pode atualizar lojas que gerencia."
-                }), 403 # Forbidden
-
-            # 3.3. Deletar foto antiga do storage se existir
+            # 3.2. Deletar foto antiga do storage se existir
             if foto_antiga:
                 try:
                     client.delete(foto_antiga, ignore_not_found=True)
                 except Exception as e:
                     print(
-                        f"Aviso: Erro ao deletar foto antiga, mas a atualização continua: {e}"
+                    f"Aviso: Erro ao deletar foto antiga, mas a atualização continua: {e}"
                     )
 
-            # 3.4. Fazer upload da nova foto
+            # 3.3. Fazer upload da nova foto
             extensao = os.path.splitext(
-                foto_loja.filename)[1] if foto_loja.filename else '.jpg'
+            foto_loja.filename)[1] if foto_loja.filename else '.jpg'
             nome_arquivo = f"loja_{loja_id}_perfil{extensao}"
 
+            # OBS: Você precisa garantir que 'client' (para o storage) e 'os' foram importados
             client.upload_from_bytes(nome_arquivo, foto_loja.read())
 
-            # 3.5. Adicionar o caminho da nova foto aos updates do DB
+            # 3.4. Adicionar o caminho da nova foto aos updates do DB
             updates.append("foto_loja = %s")
             valores.append(nome_arquivo)
 
-        else:
-            # Se não houver arquivo, verifica se o gestor é o proprietário antes de atualizar
-            cur.execute("SELECT gestor_id FROM lojas WHERE loja_id = %s;", (loja_id,))
-            resultado_loja = cur.fetchone()
-
-            if not resultado_loja:
-                conn.rollback()
-                return jsonify({"error": f"Loja com ID {loja_id} não encontrada."}), 404
-
-            proprietario_id = resultado_loja[0]
-
-            if proprietario_id != gestor_id_logado:
-                conn.rollback()
-                return jsonify({
-                    "error": "Acesso negado. Você só pode atualizar lojas que gerencia."
-                }), 403 # Forbidden
-
-        # --- Execução do SQL UPDATE ---
-        query = f"""
+        # Se houver dados a serem atualizados (incluindo o caminho da foto, se houver)
+        if updates:
+            # --- Execução do SQL UPDATE ---
+            query = f"""
             UPDATE lojas
             SET {', '.join(updates)}
             WHERE loja_id = %s;
-        """
-        # Adiciona o ID da loja para o filtro WHERE
-        valores.append(loja_id)
+            """
+            # Adiciona o ID da loja para o filtro WHERE
+            valores.append(loja_id)
 
-        cur.execute(query, tuple(valores))
+            cur.execute(query, tuple(valores))
 
-        conn.commit()
-        cur.close()
+            conn.commit()
+            cur.close()
 
-        return jsonify(
+            return jsonify(
             {"message": f"Loja (ID: {loja_id}) atualizada com sucesso."}), 200
+
+        # Caso chegue aqui sem updates, mas com foto_loja = False,
+        # o erro 400 inicial já deveria ter sido pego.
+        # Este else/retorno é apenas um fallback.
+        return jsonify({
+            "error": "Nenhum dado fornecido para atualização. Forneça pelo menos um campo ou uma imagem."
+            }), 400
 
 
     except Exception as e:
         conn.rollback()
         print(f"Erro ao atualizar loja: {e}")
         return jsonify(
-            {"error": f"Erro interno ao atualizar loja. Detalhe: {e}"}), 500
+        {"error": f"Erro interno ao atualizar loja. Detalhe: {e}"}), 500
 
     finally:
         if conn:
             conn.close()
-
-
 
 # 12: Servir Foto de Perfil da Loja
 @loja_bp.route("/loja/foto/<int:loja_id>", methods=["GET"])
