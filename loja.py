@@ -251,6 +251,69 @@ def deletar_loja(loja_id, dados_usuario):
             conn.close()
 
 
+# 12: Servir Foto de Perfil da Loja
+@loja_bp.route("/loja/foto/<int:loja_id>", methods=["GET"])
+def obter_foto_loja(loja_id):
+    """
+    Busca o caminho da foto da loja no DB e serve o arquivo do Object Storage.
+    Esta rota é pública.
+    """
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify({"error": "Falha na conexão com o banco de dados"}), 500
+
+    try:
+        cur = conn.cursor()
+
+        # MUDANÇA 1: Busca na tabela 'lojas' pelo 'loja_id'
+        cur.execute("SELECT foto_loja FROM lojas WHERE loja_id = %s;",
+                    (loja_id, ))
+        resultado = cur.fetchone()
+        cur.close()
+
+        # 1. Verifica se a loja foi encontrada e se tem um caminho de foto
+        if not resultado or not resultado[0]:
+            return jsonify({"error": "Foto da loja não encontrada"}), 404
+
+        foto_nome = resultado[0]
+
+        # 2. Baixar foto do storage (Requer 'client' do Object Storage)
+        try:
+            # ASSUME que 'client.download_as_bytes' está disponível
+            foto_bytes = client.download_as_bytes(foto_nome)
+        except Exception as e:
+            print(f"Erro ao baixar foto da loja do storage: {e}")
+            return jsonify(
+                {"error": "Arquivo de foto não encontrado no storage"}), 404
+
+        # 3. Determinar o tipo MIME baseado na extensão
+        extensao = os.path.splitext(foto_nome)[1].lower()
+        mime_types = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".gif": "image/gif",
+            ".webp": "image/webp"
+        }
+        # Padrão: image/jpeg se a extensão for desconhecida
+        mime_type = mime_types.get(extensao, "image/jpeg")
+
+        # 4. Retornar o arquivo de bytes
+        # send_file exige um objeto tipo arquivo, por isso usamos BytesIO
+        return send_file(BytesIO(foto_bytes),
+                         mimetype=mime_type,
+                         as_attachment=False)
+
+    except Exception as e:
+        print(f"Erro ao obter foto da loja: {e}")
+        return jsonify(
+            {"error":
+             "Erro interno ao carregar foto da loja. Detalhe: {e}"}), 500
+
+    finally:
+        if conn:
+            conn.close()
+
 # 📌 Rota 11 (Atualização): Atualizar uma Loja (PUT)
 @loja_bp.route('/loja/<int:loja_id>', methods=['PUT'])
 @token_obrigatorio(role_necessaria='gestor') # 🛡️ Acesso somente para gestores
@@ -263,14 +326,23 @@ def atualizar_loja(dados_usuario, loja_id):
     gestor_id_logado = dados_usuario.get('gestor_id')
 
     # 1. Captura dos dados do formulário (multipart/form-data)
+    # request.form.get() retorna "" se o campo for enviado vazio no form
     nome_loja = request.form.get('nome_loja')
     descricao = request.form.get('descricao')
     endereco_rua = request.form.get('endereco_rua')
     endereco_cidade = request.form.get('endereco_cidade')
     endereco_estado = request.form.get('endereco_estado')
     endereco_cep = request.form.get('endereco_cep')
+
+    # 🌟 CORREÇÃO 1: Trata latitude/longitude como None se forem strings vazias
     latitude = request.form.get('latitude')
     longitude = request.form.get('longitude')
+
+    # Se o valor for uma string vazia (""), converte para None. 
+    # Isso é útil para garantir que strings vazias sejam tratadas como valores "não enviados" 
+    # e não causem erro no banco de dados para campos NUMERIC.
+    latitude = latitude if latitude else None
+    longitude = longitude if longitude else None
 
     foto_loja = request.files.get('foto_loja') # Captura o arquivo da imagem
 
@@ -282,7 +354,8 @@ def atualizar_loja(dados_usuario, loja_id):
         updates.append("nome_loja = %s")
         valores.append(nome_loja)
 
-    # TRATAMENTO CORRETO DE CAMPO OPCIONAL:
+    # TRATAMENTO CORRETO DE CAMPO OPCIONAL DE TEXTO: 
+    # Permite None (não enviado) ou "" (enviado vazio)
     if descricao is not None:
         updates.append("descricao = %s")
         valores.append(descricao)
@@ -299,6 +372,8 @@ def atualizar_loja(dados_usuario, loja_id):
     if endereco_cep:
         updates.append("endereco_cep = %s")
         valores.append(endereco_cep)
+
+    # 🌟 CORREÇÃO 2: Usa 'is not None' pois convertemos "" para None na Captura (Passo 1)
     if latitude is not None:
         updates.append("latitude = %s")
         valores.append(latitude)
@@ -397,69 +472,6 @@ def atualizar_loja(dados_usuario, loja_id):
         print(f"Erro ao atualizar loja: {e}")
         return jsonify(
         {"error": f"Erro interno ao atualizar loja. Detalhe: {e}"}), 500
-
-    finally:
-        if conn:
-            conn.close()
-
-# 12: Servir Foto de Perfil da Loja
-@loja_bp.route("/loja/foto/<int:loja_id>", methods=["GET"])
-def obter_foto_loja(loja_id):
-    """
-    Busca o caminho da foto da loja no DB e serve o arquivo do Object Storage.
-    Esta rota é pública.
-    """
-    conn = get_db_connection()
-    if conn is None:
-        return jsonify({"error": "Falha na conexão com o banco de dados"}), 500
-
-    try:
-        cur = conn.cursor()
-
-        # MUDANÇA 1: Busca na tabela 'lojas' pelo 'loja_id'
-        cur.execute("SELECT foto_loja FROM lojas WHERE loja_id = %s;",
-                    (loja_id, ))
-        resultado = cur.fetchone()
-        cur.close()
-
-        # 1. Verifica se a loja foi encontrada e se tem um caminho de foto
-        if not resultado or not resultado[0]:
-            return jsonify({"error": "Foto da loja não encontrada"}), 404
-
-        foto_nome = resultado[0]
-
-        # 2. Baixar foto do storage (Requer 'client' do Object Storage)
-        try:
-            # ASSUME que 'client.download_as_bytes' está disponível
-            foto_bytes = client.download_as_bytes(foto_nome)
-        except Exception as e:
-            print(f"Erro ao baixar foto da loja do storage: {e}")
-            return jsonify(
-                {"error": "Arquivo de foto não encontrado no storage"}), 404
-
-        # 3. Determinar o tipo MIME baseado na extensão
-        extensao = os.path.splitext(foto_nome)[1].lower()
-        mime_types = {
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".png": "image/png",
-            ".gif": "image/gif",
-            ".webp": "image/webp"
-        }
-        # Padrão: image/jpeg se a extensão for desconhecida
-        mime_type = mime_types.get(extensao, "image/jpeg")
-
-        # 4. Retornar o arquivo de bytes
-        # send_file exige um objeto tipo arquivo, por isso usamos BytesIO
-        return send_file(BytesIO(foto_bytes),
-                         mimetype=mime_type,
-                         as_attachment=False)
-
-    except Exception as e:
-        print(f"Erro ao obter foto da loja: {e}")
-        return jsonify(
-            {"error":
-             "Erro interno ao carregar foto da loja. Detalhe: {e}"}), 500
 
     finally:
         if conn:
