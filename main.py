@@ -3,6 +3,7 @@ import os
 from flask import Flask, jsonify
 from flask_cors import CORS
 
+from arquivo import arquivo_bp
 from auth import auth_bp
 
 # Importamos a classe Bcrypt para tipagem, mas a instância vem de gestor.py
@@ -14,6 +15,7 @@ from gestor import (  # Importa o Blueprint do Gestor e a instância do Bcrypt
     gestor_bp,
 )
 from loja import loja_bp
+from produto import produto_bp
 
 app = Flask(__name__)
 CORS(app, origins='*', supports_credentials=True) 
@@ -31,6 +33,8 @@ app.register_blueprint(gestor_bp) # Rotas de /gestores, /login/gestor e /lojas
 app.register_blueprint(loja_bp)
 app.register_blueprint(cliente_bp)
 app.register_blueprint(auth_bp)
+app.register_blueprint(arquivo_bp)
+app.register_blueprint(produto_bp)
 # --- ROTAS GERAIS E DE CLIENTE ---
 
 
